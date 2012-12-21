@@ -9,8 +9,8 @@ object Application extends Controller {
 
   def index = Action {
     Async {
-      api.getIssue("SI-2457").map { issue =>
-        Ok(views.html.index(issue.toString))
+      api.getIssue("SI-6794"/*"SI-2457"*/).map { issue =>
+        Ok(views.html.index(issue.toHtml))
       }
     }
   }

@@ -7,20 +7,52 @@ import java.util.Date
 import play.api.libs.json.JsResult
 import scala.concurrent.Future
 import scala.concurrent.Await
+import play.api.libs.json.JsObject
+import scala.concurrent.duration.Duration
 
+trait JIRAConnection {
+  // try to authorize, or fall back to non-auth
+  // need to authorize to get voters & watchers, apparently...
+  def tryAuthUrl(url: String) = {
+    val getString = play.api.Play.current.configuration.getString(_: String)
+    (for (user <- getString("jira.user");
+         pass <- getString("jira.password"))
+      yield WS.url(url).withAuth(user, pass, com.ning.http.client.Realm.AuthScheme.BASIC)).getOrElse(WS.url(url))
+  }
+}
 
-trait Validation {
-  implicit val dateRead = Reads.IsoDateReads
+trait Validation extends JIRAConnection {
+  //  2011-05-18T15:37:07.000+0200
+  implicit val dateRead = Reads.dateReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
 
   def validate[T](tp: String)(x: Option[T]): JsResult[T] =
-    x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected."+tp))))
+    x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected." + tp))))
+
+  def optField(x: JsValue)(name: String): Option[JsValue] = x match {
+    case o: JsObject => o.value.get(name)
+    case _ => None
+  }
+
+  def name(json: JsValue) = (json \ "name").asOpt[String]
+  def self(json: JsValue) = (json \ "self").asOpt[String]
+  def id(json: JsValue)   = (json \ "id").asOpt[String] map Integer.parseInt
+
+  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] =
+    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
+    else {
+      import play.api.libs.concurrent.Execution.Implicits._
+      val self = (json \ "self").as[String]
+      tryAuthUrl(self).get().map{req =>
+        (req.json \ elemsField).as[List[T]]
+      }
+    }
 }
 
 object User extends Validation {
   implicit object reads extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
-      self <- (json \ "self").asOpt[String];
-      name <- (json \ "name").asOpt[String]
+      self <- self(json);
+      name <- name(json)
     ) yield User(self, name))
   }
 
@@ -29,14 +61,16 @@ object User extends Validation {
     users.getOrElseUpdate(self, new User(self, name))
 
 }
-class User(val self: String, val name: String)
+class User(val self: String, val name: String) {
+  override def toString = name
+}
 
 object Status extends Validation {
   implicit object reads extends Reads[Status] {
-    def reads(json: JsValue): JsResult[Status] = validate("status")(for (
-      self <- (json \ "self").asOpt[String];
-      id   <- (json \ "id").asOpt[Int];
-      name <- (json \ "name").asOpt[String];
+    def reads(json: JsValue): JsResult[Status] = validate(s"status; got $json")(for (
+      self <- self(json);
+      id <- id(json);
+      name <- name(json);
       description <- (json \ "description").asOpt[String]
     ) yield Status(self, id, name, description))
   }
@@ -45,14 +79,16 @@ object Status extends Validation {
   def apply(self: String, id: Int, name: String, description: String) =
     stati.getOrElseUpdate(self, new Status(self, id, name, description))
 }
-class Status(val self: String, val id: Int, val name: String, val description: String)
+class Status(val self: String, val id: Int, val name: String, val description: String)  {
+  override def toString = name
+}
 
 object Resolution extends Validation {
   implicit object reads extends Reads[Resolution] {
-    def reads(json: JsValue): JsResult[Resolution] = validate("resolution")(for (
-      self <- (json \ "self").asOpt[String];
-      id   <- (json \ "id").asOpt[Int];
-      name <- (json \ "name").asOpt[String];
+    def reads(json: JsValue): JsResult[Resolution] = validate(s"resolution; got $json")(for (
+      self <- self(json);
+      id <- id(json);
+      name <- name(json);
       description <- (json \ "description").asOpt[String]
     ) yield Resolution(self, id, name, description))
   }
@@ -61,16 +97,17 @@ object Resolution extends Validation {
   def apply(self: String, id: Int, name: String, description: String) =
     resolutions.getOrElseUpdate(self, new Resolution(self, id, name, description))
 }
-class Resolution(val self: String, val id: Int, val name: String, val description: String)
-
+class Resolution(val self: String, val id: Int, val name: String, val description: String)  {
+  override def toString = name
+}
 
 object Version extends Validation {
   implicit object reads extends Reads[Version] {
-    def reads(json: JsValue): JsResult[Version] = validate("version")(for (
-      self <- (json \ "self").asOpt[String];
-      id   <- (json \ "id").asOpt[Int];
-      name <- (json \ "name").asOpt[String];
-      userReleaseDate <- (json \ "userReleaseDate").asOpt[String];
+    def reads(json: JsValue): JsResult[Version] = validate(s"version; got $json")(for (
+      self <- self(json);
+      id <- id(json);
+      name <- name(json);
+      userReleaseDate <- (optField(json)("userReleaseDate")).map(_.asOpt[String]).orElse(Some(None));
       releaseDate <- (json \ "releaseDate").asOpt[Date](Reads.DefaultDateReads);
       archived <- (json \ "archived").asOpt[Boolean];
       released <- (json \ "released").asOpt[Boolean]
@@ -78,16 +115,16 @@ object Version extends Validation {
   }
 
   private val versions = collection.mutable.HashMap[String, Version]()
-  def apply(self: String, id: Int, name: String, userReleaseDate: String, releaseDate: Date, archived: Boolean, released: Boolean) =
+  def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Date, archived: Boolean, released: Boolean) =
     versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released))
 }
-class Version(val self: String, val id: Int, val name: String, val userReleaseDate: String, val releaseDate: Date, val archived: Boolean, val released: Boolean)
-
-
+class Version(val self: String, val id: Int, val name: String, val userReleaseDate: Option[String], val releaseDate: Date, val archived: Boolean, val released: Boolean)  {
+  override def toString = name
+}
 
 object Comment extends Validation {
   implicit object reads extends Reads[Comment] {
-    def reads(json: JsValue): JsResult[Comment] = validate("comment")(for (
+    def reads(json: JsValue): JsResult[Comment] = validate(s"comment; got $json")(for (
       author <- (json \ "author").asOpt[User];
       body <- (json \ "body").asOpt[String];
       updateAuthor <- (json \ "updateAuthor").asOpt[User];
@@ -96,69 +133,93 @@ object Comment extends Validation {
     ) yield Comment(author, body, updateAuthor, created, updated))
   }
 }
-case class Comment(author: User, body: String, updateAuthor: User, created: Date, updated: Date)
+case class Comment(author: User, body: String, updateAuthor: User, created: Date, updated: Date) {
+  override def toString = s"on $created, $author said '$body' ($updated, $updateAuthor)"
+}
+
+object Attachment extends Validation {
+  implicit object reads extends Reads[Attachment] {
+    def reads(json: JsValue): JsResult[Attachment] = validate(s"attachment; got $json")(for (
+      filename <- (json \ "filename").asOpt[String];
+      author <- (json \ "author").asOpt[User];
+      created <- (json \ "created").asOpt[Date];
+      size <- (json \ "size").asOpt[Int];
+      mimeType <- (json \ "mimeType").asOpt[String];
+      properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
+      content <- (json \ "content").asOpt[String]
+    ) yield Attachment(filename, author, created, content, size, mimeType, properties))
+  }
+}
+case class Attachment(filename: String, author: User, created: Date, content: String, size: Int, mimeType: String, properties: Option[JsObject])
 
 
+object IssueLink extends Validation {
+  implicit object reads extends Reads[IssueLink] {
+    def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for (
+      name <- (json \ "type" \ "name").asOpt[String];
+      inward <- (json \ "type" \ "inward").asOpt[String];
+      outward <- (json \ "type" \ "outward").asOpt[String];
+      outwardIssue <- (for(
+          out <- (optField(json)("outwardIssue"));
+          out <- out.asOpt[JsObject]) yield (out \ "key").asOpt[String]).orElse(Some(None));
+      inwardIssue <- (for(
+          in <- (optField(json)("inwardIssue"));
+          in <- in.asOpt[JsObject]) yield (in \ "key").asOpt[String]).orElse(Some(None))
+    ) yield IssueLink(name, outward, outwardIssue, inward, inwardIssue))
+  }
+}
+case class IssueLink(name: String, outward: String, outwardIssue: Option[String], inward: String, inwardIssue: Option[String])
 
-object api {
-  private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
-
+object api extends Validation {
   import play.api.libs.concurrent.Execution.Implicits._
 
-  //  val milestones =  WS.url("https://api.github.com/repos/scala/scala/milestones").get().map(_.json.as[Seq[JsValue]].map{case ms => ((ms \ "title").as[String], (ms \ "number"))}.toMap)
-  //
-  //  
-  //  def makeToken(user: String, pass: String) = for (
-  //      resp <- WS.url("https://api.github.com/authorizations").withAuth(user, pass, com.ning.http.client.Realm.AuthScheme.BASIC).post(Json.toJson(Map("scopes" -> Json.toJson(Seq(Json.toJson("public_repo"))), "note" -> Json.toJson("gh")))))
-  //        yield (resp.json \ "token").as[String]
-
+  private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
   def getIssue(key: String): Future[Issue] = {
-    WS.url(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
+    tryAuthUrl(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
   }
 
   def parseIssue(i: JsValue): Issue =
-    Issue((i \ "key").as[String], (i \ "fields").as[Map[String, JsValue]], (i \ "changelog" \ "histories").as[List[JsValue]])
+    Issue((i \ "key").as[String], (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(k, v) }, (i \ "changelog" \ "histories").as[List[JsValue]])
 
+  def parseField(field: String, v: JsValue): (String, Any) = (field,
+    field match {
+      case "description"       => v.as[String]
+      case "summary"           => v.as[String]
+      case "reporter"          => v.as[User]
+      case "assignee"          => v.asOpt[User]
+      case "environment"       => v.asOpt[String]
+      case "status"            => v.as[Status]
+      case "resolution"        => v.asOpt[Resolution]
+      case "resolutiondate"    => v.asOpt[Date]
+      case "created"           => v.as[Date]
+      case "updated"           => v.as[Date]
+      case "duedate"           => v.asOpt[Date]
+      case "versions"          => v.as[List[Version]] // affected version
+      case "fixVersions"       => v.as[List[Version]]
+      case "issuetype"         => (v \ "name").as[String] // IssueType
+      case "priority"          => (v \ "name").as[String] // Priority
+      case "labels"            => v.as[List[String]]
+      case "issuelinks"        => v.as[List[IssueLink]]
+      case "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
+      case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
+      case "attachment"        => v.as[List[Attachment]]
+      case "issuekey"          => v.as[String]
+      case "project"           => (v \ "key").as[String] // Project
+      case "votes"             => lazyList[User](v, "votes", "voters") // List[Vote]
+      case "watches"           => lazyList[User](v, "watchCount", "watchers") // List[Watch]
+      case "customfield_10005" => v.asOpt[List[User]] // trac cc
+      case "customfield_10101" => v.asOpt[List[String]] // flagged
+      case "customfield_10104" => v.asOpt[Float] // Story points
+      case "customfield_10105" => v.asOpt[Float] // business value
+      case "subtasks"          => v
+      case "workratio"         => v.asOpt[Float]
+    })
 }
 
 // TODO: scalac bug, why does this have to come after the companion object?
-case class Issue(key: String, fields: Map[String, JsValue], changelog: List[JsValue]) {
-  def apply(field: String): Any = {
-    val v = fields(field)
-    try {
-      field match {
-        case "description"       => v.as[String]
-        case "reporter"          => v.as[User]
-        case "assignee"          => v.as[User]
-        case "environment"       => v.as[String]
-        case "status"            => v.as[Status]
-        case "resolution"        => v.as[Resolution]
-        case "resolutiondate"    => v.as[Date]
-        case "created"           => v.as[Date]
-        case "updated"           => v.as[Date]
-        case "duedate"           => v.as[Date]
-        case "versions"          => v.as[List[Version]] // affected version
-        case "fixVersions"       => v.as[List[Version]]
-        case "issuetype"         => v // IssueType
-        case "priority"          => v // Priority
-        case "labels"            => v // List[String]
-        case "issuelinks"        => v // List[IssueLink]
-        case "components"        => v // List[Component]
-        case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
-        case "attachment"        => v // List[Attachment]
-        case "issuekey"          => v.as[String]
-        case "votes"             => v // List[Vote]
-        case "project"           => v // Project
-        case "watches"           => v // List[Watch]
-        case "customfield_10005" => v // List[User] // trac cc
-        case "customfield_10101" => v // List[String] // flagged
-        case "customfield_10104" => v // Float // Story points
-        case "customfield_10105" => v // Float // business value
-        case "subtasks"          => v // List[IssueLink]
-        case "workratio"         => v // Float
-      }
-    } catch {
-      case _ : JsResultException => null
-    }
-  }
+case class Issue(key: String, fields: Map[String, Any], changelog: List[JsValue]) {
+  def toHtml = <div> {key}: <ul>{fields.toList.map{
+    case (k@("votes" | "watches"), v: Future[List[User]]) => <li> {k}: {Await.result(v, Duration.Inf)} </li>
+    case (k,v) => <li> {k}: {v} </li>
+   }}</ul><p>{changelog}</p></div>
 }

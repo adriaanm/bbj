@@ -114,17 +114,17 @@ object Version extends Validation {
       id              <- id(json);
       name            <- name(json);
       userReleaseDate <- (optField(json)("userReleaseDate")).map(_.asOpt[String]).orElse(Some(None));
-      releaseDate     <- (json \ "releaseDate").asOpt[Date](Reads.DefaultDateReads);
+      releaseDate     <- (optField(json)("releaseDate")).map(_.asOpt[Date](Reads.DefaultDateReads)).orElse(Some(None));
       archived        <- (json \ "archived").asOpt[Boolean];
       released        <- (json \ "released").asOpt[Boolean]
     ) yield new Version(self, id, name, userReleaseDate, releaseDate, archived, released))
   }
 
   private val versions = collection.mutable.HashMap[String, Version]()
-  def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Date, archived: Boolean, released: Boolean) =
+  def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Option[Date], archived: Boolean, released: Boolean) =
     versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released))
 }
-class Version(val self: String, val id: Int, val name: String, val userReleaseDate: Option[String], val releaseDate: Date, val archived: Boolean, val released: Boolean)  {
+class Version(val self: String, val id: Int, val name: String, val userReleaseDate: Option[String], val releaseDate: Option[Date], val archived: Boolean, val released: Boolean)  {
   override def toString = name
 }
 
@@ -158,11 +158,10 @@ object Attachment extends Validation {
 }
 case class Attachment(filename: String, author: User, created: Date, content: String, size: Int, mimeType: String, properties: Option[JsObject])
 
-
 object IssueLink extends Validation {
   implicit object reads extends Reads[IssueLink] {
     def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for (
-      name    <- name(json);
+      name    <- name(json \ "type");
       inward  <- (json \ "type" \ "inward").asOpt[String];
       outward <- (json \ "type" \ "outward").asOpt[String];
       outwardIssue <- (for(

@@ -237,40 +237,41 @@ object api extends Validation {
     def loop(failed: List[Int]): Future[Unit] =
       Future.sequence(tryDownloadIssues(failed)).map(_.flatten).flatMap {
         case Nil => Future.successful(())
-        case failed => loop(failed)
+        case failed =>
+          println("retrying: "+ failed)
+          loop(failed)
       }
 
     loop((firstIssueKey to lastIssueKey).toList)
   }
 
-  def getIssue(key: String): Future[Issue] = {
-    //tryAuthUrl(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
+  def getIssue(key: String): Future[Issue] = //tryAuthUrl(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
     Future {
       val f = new File(s"$jsonRepo/${key.substring(3)}.json") // drop "SI-" prefix
       val data = new Array[Byte](f.length.asInstanceOf[Int])
       (new DataInputStream(new FileInputStream(f))).readFully(data)
-      try parseIssue(Json.parse(new String(data)))
-      catch { case e: Exception => Issue(key, Map("exception" -> e), Nil)}
+      parseIssue(Json.parse(new String(data)))
     }
-  }
 
   val firstIssueKey = 1
-  val lastIssueKey = 300 // 6856
+  val lastIssueKey = 1000 // 6856
   def issues: IndexedSeq[Future[Issue]] = {
    val keys = (firstIssueKey to lastIssueKey)
    if (keys.exists{i => !(new File(s"$jsonRepo/${i}.json")).exists})
      Await.ready(downloadIssues(), Duration.Inf )
 
-   keys.map (i => getIssue("SI-"+i))
+   keys.map (i => getIssue("SI-"+i) recover { case e: Exception =>
+     e.printStackTrace()
+     Issue("SI-"+i, Map("!!!exception" -> e), Nil)
+   })
   }
-
 
   def parseIssue(i: JsValue): Issue =
     Issue((i \ "key").as[String], (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(k, v) }, (i \ "changelog" \ "histories").as[List[JsValue]])
 
   def parseField(field: String, v: JsValue): (String, Any) = (field,
-    field match {
-      case "description"       => v.as[String]
+    try field match {
+      case "description"       => v.asOpt[String]
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
       case "assignee"          => v.asOpt[User]
@@ -300,6 +301,8 @@ object api extends Validation {
       case "customfield_10105" => v.asOpt[Float] // business value
       case "subtasks"          => v
       case "workratio"         => v.asOpt[Float]
+    } catch {
+      case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
     })
 }
 

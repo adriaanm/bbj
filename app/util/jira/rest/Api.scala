@@ -295,8 +295,8 @@ object api extends Validation {
       case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
       case "attachment"        => v.as[List[Attachment]]
 
-      case "votes"             => lazyList[User](v, "votes", "voters") // List[Vote]
-      case "watches"           => lazyList[User](v, "watchCount", "watchers") // List[Watch]
+      case "votes"             => lazyList[User](v, "votes", "voters") // Future[List[Vote]]
+      case "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[Watch]]
 
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
       case "customfield_10101" => v.asOpt[List[String]] // flagged

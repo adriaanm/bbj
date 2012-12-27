@@ -45,71 +45,42 @@ trait Common {
   def self(json: JsValue) = (json \ "self").asOpt[String]
   def id(json: JsValue) = (json \ "id").asOpt[String] map Integer.parseInt
 
-  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] = Future.successful(Nil)
-  //    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
-  //    else {
-  //      import play.api.libs.concurrent.Execution.Implicits._
-  //      val self = (json \ "self").as[String]
-  //      tryAuthUrl(self).get().map{ req =>
-  //        (req.json \ elemsField).as[List[T]]
-  //      }
-  //    }
+  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] =
+    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
+    else {
+      val self = (json \ "self").as[String]
+      tryAuthUrl(self).get().map { req =>
+        (req.json \ elemsField).as[List[T]]
+      }
+    }
 }
 
 object User extends Common {
   implicit object reads extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
       self <- self(json);
-      name <- name(json)
-    ) yield User(self, name))
+      name <- name(json);
+      emailAddress <- (json \ "emailAddress").asOpt[String];
+      displayName <- (json \ "displayName").asOpt[String]
+    ) yield User(self, name, displayName, emailAddress))
+  }
+
+  private def cleanEmail(email: String): Option[String] = email match {
+    case "non-valid@e-mail.null" => None
+    case ""                      => None
+    case e                       => Some(e)
   }
 
   private val users = collection.mutable.HashMap[String, User]()
-  def apply(self: String, name: String) =
-    users.synchronized{users.getOrElseUpdate(self, new User(self, name))}
+  def apply(self: String, name: String, displayName: String, emailAddress: String) =
+    users.synchronized { users.getOrElseUpdate(self, new User(self, name, displayName, cleanEmail(emailAddress))) }
 
   def allUsers = users.values
 }
-class User(val self: String, val name: String) {
-  override def toString = name
-}
-
-object Status extends Common {
-  implicit object reads extends Reads[Status] {
-    def reads(json: JsValue): JsResult[Status] = validate(s"status; got $json")(for (
-      self <- self(json);
-      id <- id(json);
-      name <- name(json);
-      description <- (json \ "description").asOpt[String]
-    ) yield Status(self, id, name, description))
-  }
-
-  private val stati = collection.mutable.HashMap[String, Status]()
-  def apply(self: String, id: Int, name: String, description: String) =
-    stati.synchronized{stati.getOrElseUpdate(self, new Status(self, id, name, description))}
-  def allStati = stati.values
-}
-class Status(val self: String, val id: Int, val name: String, val description: String) {
-  override def toString = name
-}
-
-object Resolution extends Common {
-  implicit object reads extends Reads[Resolution] {
-    def reads(json: JsValue): JsResult[Resolution] = validate(s"resolution; got $json")(for (
-      self <- self(json);
-      id <- id(json);
-      name <- name(json);
-      description <- (json \ "description").asOpt[String]
-    ) yield Resolution(self, id, name, description))
-  }
-
-  private val resolutions = collection.mutable.HashMap[String, Resolution]()
-  def apply(self: String, id: Int, name: String, description: String) =
-    resolutions.synchronized{resolutions.getOrElseUpdate(self, new Resolution(self, id, name, description))}
-  def allResolutions = resolutions.values
-}
-class Resolution(val self: String, val id: Int, val name: String, val description: String) {
-  override def toString = name
+case class User(self: String, name: String, displayName: String, emailAddress: Option[String]) {
+  import User._
+  lazy val groups = tryAuthUrl(self + "&expand=groups").get().map { req => (req.json \ "groups" \\ "name") }
+  override def toString = displayName
 }
 
 /*
@@ -132,7 +103,7 @@ object Version extends Common {
 
   private val versions = collection.mutable.HashMap[String, Version]()
   def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Option[Date], archived: Boolean, released: Boolean) =
-    versions.synchronized{ versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released)) }
+    versions.synchronized { versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released)) }
 
   def allVersions = versions.values
 }
@@ -170,15 +141,14 @@ object Attachment extends Common {
 }
 case class Attachment(filename: String, author: User, created: Date, content: String, size: Int, mimeType: String, properties: Option[JsObject])
 
-/**
-scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.name)).distinct
-Vector(Relates, Duplicate, Blocks, Cloners)
-
-scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.inward)).distinct
-Vector(relates to, is duplicated by, is blocked by, is cloned by)
-
-scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.outward)).distinct
-Vector(relates to, duplicates, blocks, clones)
+/** scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.name)).distinct
+ *  Vector(Relates, Duplicate, Blocks, Cloners)
+ *
+ *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.inward)).distinct
+ *  Vector(relates to, is duplicated by, is blocked by, is cloned by)
+ *
+ *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.outward)).distinct
+ *  Vector(relates to, duplicates, blocks, clones)
  *
  */
 object IssueLink extends Common {
@@ -201,22 +171,22 @@ object IssueLink extends Common {
 case class IssueLink(name: String, outward: String, outwardIssue: Option[String], inward: String, inwardIssue: Option[String]) {
   // assert:
   (name, outward, inward) match {
-    case ("Relates", "relates to", "relates to") =>
+    case ("Relates", "relates to", "relates to")         =>
     case ("Duplicate", "is duplicated by", "duplicates") =>
     case ("Duplicate", "duplicates", "is duplicated by") =>
-    case ("Blocks", "is blocked by", "blocks") =>
-    case ("Blocks", "blocks", "is blocked by") =>
-    case ("Cloners", "is cloned by", "clones") =>
-    case ("Cloners", "clones", "is cloned by") =>
+    case ("Blocks", "is blocked by", "blocks")           =>
+    case ("Blocks", "blocks", "is blocked by")           =>
+    case ("Cloners", "is cloned by", "clones")           =>
+    case ("Cloners", "clones", "is cloned by")           =>
   }
 }
 
 /** to experiment from the play console:
-
-new play.core.StaticApplication(new java.io.File("."))
-import util.jira.rest._
-val issues = concurrent.Await.result(api.issues, concurrent.duration.Duration.Inf)
-
+ *
+ *  new play.core.StaticApplication(new java.io.File("."))
+ *  import util.jira.rest._
+ *  val issues = concurrent.Await.result(api.issues, concurrent.duration.Duration.Inf)
+ *
  */
 object api extends Common {
   private def readFully(in: InputStream, bufferSize: Int = 1024): Array[Byte] = {
@@ -249,7 +219,7 @@ object api extends Common {
 
   def getIssue(i: Int): Future[Option[Issue]] = {
     def loadCachedIssue =
-      Future (Some {
+      Future(Some {
         val f = fileFor(i)
         val data = new Array[Byte](f.length.asInstanceOf[Int])
         (new DataInputStream(new FileInputStream(f))).readFully(data)
@@ -302,6 +272,40 @@ object api extends Common {
           (i \ "changelog" \ "histories").as[List[JsValue]])
     }
 
+  // TODO
+  def componentToLabel(c: String): String = c match {
+    case "Scaladoc Tool"          => "Scaladoc Tool"
+    case "Misc Compiler"          => "Misc Compiler"
+    case "Misc Library"           => "Misc Library"
+    case "Specification"          => "Specification"
+    case "Eclipse Plugin (EOL)"   => "Eclipse Plugin (EOL)"
+    case "Packaging"              => "Packaging"
+    case "Documentation and API"  => "Documentation and API"
+    case "Repl / Interpreter"     => "Repl / Interpreter"
+    case "Pattern Matcher"        => "Pattern Matcher"
+    case "Build, Developer Tools" => "Build, Developer Tools"
+    case "XML Support"            => "XML Support"
+    case "Jira"                   => "Jira"
+    case "Website"                => "Website"
+    case "Actors Library"         => "Actors Library"
+    case "MSIL Backend"           => "MSIL Backend"
+    case "Parser Combinators"     => "Parser Combinators"
+    case "Enumeration"            => "Enumeration"
+    case "Type Checker"           => "Type Checker"
+    case "Swing Library"          => "Swing Library"
+    case "Continuations"          => "Continuations"
+    case "Collections"            => "Collections"
+    case "Specialization"         => "Specialization"
+    case "Type Inference"         => "Type Inference"
+    case "Reflection"             => "Reflection"
+    case "Optimizer"              => "Optimizer"
+    case "Compiler Backend"       => "Compiler Backend"
+    case "Presentation Compiler"  => "Presentation Compiler"
+    case "Macros"                 => "Macros"
+    case "Concurrent Library"     => "Concurrent Library"
+    case "Partest"                => "Partest"
+  }
+
   def parseField(field: String, v: JsValue): (String, Any) = (field,
     try field match {
       case "project"           => (v \ "key").as[String] // Project
@@ -310,21 +314,21 @@ object api extends Common {
       case "reporter"          => v.as[User]
       case "created"           => v.as[Date]
       case "updated"           => v.as[Date]
-      case "issuetype"         => (v \ "name").as[String] // IssueType
-      case "priority"          => (v \ "name").as[String] // Priority
-      case "status"            => v.as[Status]
+      case "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
+      case "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
+      case "status"            => (v \ "name").as[String] // Status: (Open, Closed)
 
       case "assignee"          => v.asOpt[User]
       case "description"       => v.asOpt[String]
-      case "environment"       => v.asOpt[String]
-      case "resolution"        => v.asOpt[Resolution]
+      case "environment"       => v.asOpt[String] // TODO: extract labels -- this field is extremely messy
+      case "resolution"        => optField(v)("name").map(_.as[String]) // "Fixed", "Not a Bug", "Won't Fix", "Cannot Reproduce", "Duplicate", "Out of Scope", "Incomplete", "Fixed, Backport Pending"
       case "resolutiondate"    => v.asOpt[Date]
       case "duedate"           => v.asOpt[Date]
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
       case "labels"            => v.as[List[String]]
       case "issuelinks"        => v.as[List[IssueLink]]
-      case "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
+      case "components"        => v.as[List[JsObject]].map(c => componentToLabel((c \ "name").as[String]))
       case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
       case "attachment"        => v.as[List[Attachment]]
 
@@ -332,12 +336,12 @@ object api extends Common {
       case "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[Watch]]
 
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
-      case "customfield_10101" => v.asOpt[List[String]] // flagged
-      case "customfield_10104" => v.asOpt[Float] // Story points
-      case "customfield_10105" => v.asOpt[Float] // business value
+//      case "customfield_10101" => v.asOpt[List[String]] // flagged -- never set
+//      case "customfield_10104" => v.asOpt[Float] // Story points
+//      case "customfield_10105" => v.asOpt[Float] // business value
       case "subtasks" =>
         assert(v.as[List[JsValue]].isEmpty, "subtasks not supported"); v
-      case "workratio" => v.asOpt[Float]
+//      case "workratio" => v.asOpt[Float] // always -1
     } catch {
       case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
     })

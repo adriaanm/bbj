@@ -66,8 +66,9 @@ object User extends Common {
 
   private val users = collection.mutable.HashMap[String, User]()
   def apply(self: String, name: String) =
-    users.getOrElseUpdate(self, new User(self, name))
+    users.synchronized{users.getOrElseUpdate(self, new User(self, name))}
 
+  def allUsers = users.values
 }
 class User(val self: String, val name: String) {
   override def toString = name
@@ -85,7 +86,8 @@ object Status extends Common {
 
   private val stati = collection.mutable.HashMap[String, Status]()
   def apply(self: String, id: Int, name: String, description: String) =
-    stati.getOrElseUpdate(self, new Status(self, id, name, description))
+    stati.synchronized{stati.getOrElseUpdate(self, new Status(self, id, name, description))}
+  def allStati = stati.values
 }
 class Status(val self: String, val id: Int, val name: String, val description: String) {
   override def toString = name
@@ -103,7 +105,8 @@ object Resolution extends Common {
 
   private val resolutions = collection.mutable.HashMap[String, Resolution]()
   def apply(self: String, id: Int, name: String, description: String) =
-    resolutions.getOrElseUpdate(self, new Resolution(self, id, name, description))
+    resolutions.synchronized{resolutions.getOrElseUpdate(self, new Resolution(self, id, name, description))}
+  def allResolutions = resolutions.values
 }
 class Resolution(val self: String, val id: Int, val name: String, val description: String) {
   override def toString = name
@@ -129,7 +132,9 @@ object Version extends Common {
 
   private val versions = collection.mutable.HashMap[String, Version]()
   def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Option[Date], archived: Boolean, released: Boolean) =
-    versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released))
+    versions.synchronized{ versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released)) }
+
+  def allVersions = versions.values
 }
 class Version(val self: String, val id: Int, val name: String, val userReleaseDate: Option[String], val releaseDate: Option[Date], val archived: Boolean, val released: Boolean) {
   override def toString = name

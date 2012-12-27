@@ -271,35 +271,38 @@ object api extends Validation {
 
   def parseField(field: String, v: JsValue): (String, Any) = (field,
     try field match {
-      case "description"       => v.asOpt[String]
+      case "project"           => (v \ "key").as[String] // Project
+      case "issuekey"          => v.as[String]
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
-      case "assignee"          => v.asOpt[User]
-      case "environment"       => v.asOpt[String]
-      case "status"            => v.as[Status]
-      case "resolution"        => v.asOpt[Resolution]
-      case "resolutiondate"    => v.asOpt[Date]
       case "created"           => v.as[Date]
       case "updated"           => v.as[Date]
+      case "issuetype"         => (v \ "name").as[String] // IssueType
+      case "priority"          => (v \ "name").as[String] // Priority
+      case "status"            => v.as[Status]
+
+      case "assignee"          => v.asOpt[User]
+      case "description"       => v.asOpt[String]
+      case "environment"       => v.asOpt[String]
+      case "resolution"        => v.asOpt[Resolution]
+      case "resolutiondate"    => v.asOpt[Date]
       case "duedate"           => v.asOpt[Date]
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
-      case "issuetype"         => (v \ "name").as[String] // IssueType
-      case "priority"          => (v \ "name").as[String] // Priority
       case "labels"            => v.as[List[String]]
       case "issuelinks"        => v.as[List[IssueLink]]
       case "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
       case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
       case "attachment"        => v.as[List[Attachment]]
-      case "issuekey"          => v.as[String]
-      case "project"           => (v \ "key").as[String] // Project
+
       case "votes"             => lazyList[User](v, "votes", "voters") // List[Vote]
       case "watches"           => lazyList[User](v, "watchCount", "watchers") // List[Watch]
+
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
       case "customfield_10101" => v.asOpt[List[String]] // flagged
       case "customfield_10104" => v.asOpt[Float] // Story points
       case "customfield_10105" => v.asOpt[Float] // business value
-      case "subtasks"          => v
+      case "subtasks"          => assert(v.as[List[JsValue]].isEmpty, "subtasks not supported"); v
       case "workratio"         => v.asOpt[Float]
     } catch {
       case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
@@ -307,5 +310,4 @@ object api extends Validation {
 }
 
 // TODO: scalac bug, why does this have to come after the companion object?
-case class Issue(key: String, fields: Map[String, Any], changelog: List[JsValue]) {
-}
+case class Issue(key: String, fields: Map[String, Any], changelog: List[JsValue])

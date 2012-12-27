@@ -9,6 +9,11 @@ import scala.concurrent.Future
 import scala.concurrent.Await
 import play.api.libs.json.JsObject
 import scala.concurrent.duration.Duration
+import java.io.FileInputStream
+import java.io.File
+import java.io.DataInputStream
+import java.io.InputStream
+import java.io.FileOutputStream
 
 trait JIRAConnection {
   // try to authorize, or fall back to non-auth
@@ -37,15 +42,15 @@ trait Validation extends JIRAConnection {
   def self(json: JsValue) = (json \ "self").asOpt[String]
   def id(json: JsValue)   = (json \ "id").asOpt[String] map Integer.parseInt
 
-  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] =
-    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
-    else {
-      import play.api.libs.concurrent.Execution.Implicits._
-      val self = (json \ "self").as[String]
-      tryAuthUrl(self).get().map{req =>
-        (req.json \ elemsField).as[List[T]]
-      }
-    }
+  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] = Future.successful(Nil)
+//    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
+//    else {
+//      import play.api.libs.concurrent.Execution.Implicits._
+//      val self = (json \ "self").as[String]
+//      tryAuthUrl(self).get().map{ req =>
+//        (req.json \ elemsField).as[List[T]]
+//      }
+//    }
 }
 
 object User extends Validation {
@@ -68,9 +73,9 @@ class User(val self: String, val name: String) {
 object Status extends Validation {
   implicit object reads extends Reads[Status] {
     def reads(json: JsValue): JsResult[Status] = validate(s"status; got $json")(for (
-      self <- self(json);
-      id <- id(json);
-      name <- name(json);
+      self        <- self(json);
+      id          <- id(json);
+      name        <- name(json);
       description <- (json \ "description").asOpt[String]
     ) yield Status(self, id, name, description))
   }
@@ -86,9 +91,9 @@ class Status(val self: String, val id: Int, val name: String, val description: S
 object Resolution extends Validation {
   implicit object reads extends Reads[Resolution] {
     def reads(json: JsValue): JsResult[Resolution] = validate(s"resolution; got $json")(for (
-      self <- self(json);
-      id <- id(json);
-      name <- name(json);
+      self        <- self(json);
+      id          <- id(json);
+      name        <- name(json);
       description <- (json \ "description").asOpt[String]
     ) yield Resolution(self, id, name, description))
   }
@@ -104,13 +109,13 @@ class Resolution(val self: String, val id: Int, val name: String, val descriptio
 object Version extends Validation {
   implicit object reads extends Reads[Version] {
     def reads(json: JsValue): JsResult[Version] = validate(s"version; got $json")(for (
-      self <- self(json);
-      id <- id(json);
-      name <- name(json);
+      self            <- self(json);
+      id              <- id(json);
+      name            <- name(json);
       userReleaseDate <- (optField(json)("userReleaseDate")).map(_.asOpt[String]).orElse(Some(None));
-      releaseDate <- (json \ "releaseDate").asOpt[Date](Reads.DefaultDateReads);
-      archived <- (json \ "archived").asOpt[Boolean];
-      released <- (json \ "released").asOpt[Boolean]
+      releaseDate     <- (json \ "releaseDate").asOpt[Date](Reads.DefaultDateReads);
+      archived        <- (json \ "archived").asOpt[Boolean];
+      released        <- (json \ "released").asOpt[Boolean]
     ) yield new Version(self, id, name, userReleaseDate, releaseDate, archived, released))
   }
 
@@ -125,11 +130,11 @@ class Version(val self: String, val id: Int, val name: String, val userReleaseDa
 object Comment extends Validation {
   implicit object reads extends Reads[Comment] {
     def reads(json: JsValue): JsResult[Comment] = validate(s"comment; got $json")(for (
-      author <- (json \ "author").asOpt[User];
-      body <- (json \ "body").asOpt[String];
+      author       <- (json \ "author").asOpt[User];
+      body         <- (json \ "body").asOpt[String];
       updateAuthor <- (json \ "updateAuthor").asOpt[User];
-      created <- (json \ "created").asOpt[Date];
-      updated <- (json \ "updated").asOpt[Date]
+      created      <- (json \ "created").asOpt[Date];
+      updated      <- (json \ "updated").asOpt[Date]
     ) yield Comment(author, body, updateAuthor, created, updated))
   }
 }
@@ -140,13 +145,13 @@ case class Comment(author: User, body: String, updateAuthor: User, created: Date
 object Attachment extends Validation {
   implicit object reads extends Reads[Attachment] {
     def reads(json: JsValue): JsResult[Attachment] = validate(s"attachment; got $json")(for (
-      filename <- (json \ "filename").asOpt[String];
-      author <- (json \ "author").asOpt[User];
-      created <- (json \ "created").asOpt[Date];
-      size <- (json \ "size").asOpt[Int];
-      mimeType <- (json \ "mimeType").asOpt[String];
+      filename   <- (json \ "filename").asOpt[String];
+      author     <- (json \ "author").asOpt[User];
+      created    <- (json \ "created").asOpt[Date];
+      size       <- (json \ "size").asOpt[Int];
+      mimeType   <- (json \ "mimeType").asOpt[String];
       properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
-      content <- (json \ "content").asOpt[String]
+      content    <- (json \ "content").asOpt[String]
     ) yield Attachment(filename, author, created, content, size, mimeType, properties))
   }
 }
@@ -156,15 +161,15 @@ case class Attachment(filename: String, author: User, created: Date, content: St
 object IssueLink extends Validation {
   implicit object reads extends Reads[IssueLink] {
     def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for (
-      name <- (json \ "type" \ "name").asOpt[String];
-      inward <- (json \ "type" \ "inward").asOpt[String];
+      name    <- name(json);
+      inward  <- (json \ "type" \ "inward").asOpt[String];
       outward <- (json \ "type" \ "outward").asOpt[String];
       outwardIssue <- (for(
           out <- (optField(json)("outwardIssue"));
           out <- out.asOpt[JsObject]) yield (out \ "key").asOpt[String]).orElse(Some(None));
       inwardIssue <- (for(
-          in <- (optField(json)("inwardIssue"));
-          in <- in.asOpt[JsObject]) yield (in \ "key").asOpt[String]).orElse(Some(None))
+          in  <- (optField(json)("inwardIssue"));
+          in  <- in.asOpt[JsObject]) yield (in \ "key").asOpt[String]).orElse(Some(None))
     ) yield IssueLink(name, outward, outwardIssue, inward, inwardIssue))
   }
 }
@@ -173,10 +178,83 @@ case class IssueLink(name: String, outward: String, outwardIssue: Option[String]
 object api extends Validation {
   import play.api.libs.concurrent.Execution.Implicits._
 
+  private val jsonRepo = "/Users/adriaan/jira"
   private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
-  def getIssue(key: String): Future[Issue] = {
-    tryAuthUrl(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
+  private def downloadIssue(i: Int) = tryAuthUrl(jiraUrl(s"/issue/SI-${i}?expand=changelog")).get()
+
+  // write the inputStream to a FileOutputStream
+  private def copyToFile(in: InputStream, f: File, bufferSize: Int = 1024) = {
+    val bytes = new Array[Byte](bufferSize)
+    val out = new FileOutputStream(f)
+
+    @annotation.tailrec
+    def write(): Unit =
+      in.read(bytes) match {
+        case -1 =>
+        case count =>
+          out.write(bytes, 0, count)
+          write()
+      }
+
+    try write()
+    finally { out.flush(); out.close() }
   }
+
+  // this needs to run until fixpoint...
+  // TODO:
+  // - convert into proper monadic computation that tracks whether something was changed and repeat
+  // - do twice and make sure the contents don't change --> use git repo?
+  private def tryDownloadIssues(issues: List[Int]): List[Future[Option[Int]]] =
+    issues.map { i =>
+      try {
+        val f = new File(s"$jsonRepo/${i}.json")
+        if (f.exists) Future.successful(None)
+        else downloadIssue(i).map { resp =>
+          copyToFile(resp.ahcResponse.getResponseBodyAsStream, f)
+          println("YEP: "+ i)
+          None
+        } recover { case e =>
+          println(s"MEH: $i with $e")
+          Some(i)
+        }
+      } catch {
+        case e: Exception =>
+          println(s"$i failed: $e")
+          Future.successful(Some(i))
+      }
+    }
+
+  private def downloadIssues(): Future[Unit]  = {
+    def loop(failed: List[Int]): Future[Unit] =
+      Future.sequence(tryDownloadIssues(failed)).map(_.flatten).flatMap {
+        case Nil => Future.successful(())
+        case failed => loop(failed)
+      }
+
+    loop((firstIssueKey to lastIssueKey).toList)
+  }
+
+  def getIssue(key: String): Future[Issue] = {
+    //tryAuthUrl(jiraUrl(s"/issue/$key?expand=changelog")).get().map(req => parseIssue(req.json))
+    Future {
+      val f = new File(s"$jsonRepo/${key.substring(3)}.json") // drop "SI-" prefix
+      val data = new Array[Byte](f.length.asInstanceOf[Int])
+      (new DataInputStream(new FileInputStream(f))).readFully(data)
+      try parseIssue(Json.parse(new String(data)))
+      catch { case e: Exception => Issue(key, Map("exception" -> e), Nil)}
+    }
+  }
+
+  val firstIssueKey = 1
+  val lastIssueKey = 300 // 6856
+  def issues: IndexedSeq[Future[Issue]] = {
+   val keys = (firstIssueKey to lastIssueKey)
+   if (keys.exists{i => !(new File(s"$jsonRepo/${i}.json")).exists})
+     Await.ready(downloadIssues(), Duration.Inf )
+
+   keys.map (i => getIssue("SI-"+i))
+  }
+
 
   def parseIssue(i: JsValue): Issue =
     Issue((i \ "key").as[String], (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(k, v) }, (i \ "changelog" \ "histories").as[List[JsValue]])
@@ -218,8 +296,4 @@ object api extends Validation {
 
 // TODO: scalac bug, why does this have to come after the companion object?
 case class Issue(key: String, fields: Map[String, Any], changelog: List[JsValue]) {
-  def toHtml = <div> {key}: <ul>{fields.toList.map{
-    case (k@("votes" | "watches"), v: Future[List[User]]) => <li> {k}: {Await.result(v, Duration.Inf)} </li>
-    case (k,v) => <li> {k}: {v} </li>
-   }}</ul><p>{changelog}</p></div>
 }

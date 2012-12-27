@@ -14,6 +14,7 @@ import java.io.File
 import java.io.DataInputStream
 import java.io.InputStream
 import java.io.FileOutputStream
+import scala.collection.mutable.ArrayBuffer
 
 trait JIRAConnection {
   // try to authorize, or fall back to non-auth
@@ -182,21 +183,30 @@ object api extends Validation {
   private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
   private def downloadIssue(i: Int) = tryAuthUrl(jiraUrl(s"/issue/SI-${i}?expand=changelog")).get()
 
-  // write the inputStream to a FileOutputStream
-  private def copyToFile(in: InputStream, f: File, bufferSize: Int = 1024) = {
+  // write the inputStream to a FileOutputStream and make sure the recevied Json parses (sometimes the server returns garbage!?)
+  private def copyJsonToFile(in: InputStream, f: File, bufferSize: Int = 1024) = /*f.synchronized*/ {
     val bytes = new Array[Byte](bufferSize)
     val out = new FileOutputStream(f)
+    val contents = ArrayBuffer[Byte]()
 
     @annotation.tailrec
     def write(): Unit =
       in.read(bytes) match {
         case -1 =>
         case count =>
+          val read = new Array[Byte](count)
+          Array.copy(bytes, 0, read, 0, read.size)
+          contents ++= read
           out.write(bytes, 0, count)
           write()
       }
 
-    try write()
+    try { write(); Json.parse(new String(contents.toArray)) }
+    catch { case e =>
+      println("FILE EXCEPTION: "+ e)
+      f.delete()
+      throw e
+    }
     finally { out.flush(); out.close() }
   }
 
@@ -208,9 +218,9 @@ object api extends Validation {
     issues.map { i =>
       try {
         val f = new File(s"$jsonRepo/${i}.json")
-        if (f.exists) Future.successful(None)
+        if (f.exists) Future.successful(None) // assume corrupted files are deleted by copyToFile
         else downloadIssue(i).map { resp =>
-          copyToFile(resp.ahcResponse.getResponseBodyAsStream, f)
+          copyJsonToFile(resp.ahcResponse.getResponseBodyAsStream, f)
           println("YEP: "+ i)
           None
         } recover { case e =>

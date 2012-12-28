@@ -21,13 +21,15 @@ trait Common {
 
   def getString(x: String) = play.api.Play.current.configuration.getString(x)
 
+  lazy val user = getString("jira.user")
+  lazy val pass = getString("jira.password")
+
   // try to authorize, or fall back to non-auth
   // need to authorize to get voters & watchers, apparently...
   def tryAuthUrl(url: String) = {
-    (for (
-      user <- getString("jira.user");
-      pass <- getString("jira.password")
-    ) yield WS.url(url).withAuth(user, pass, com.ning.http.client.Realm.AuthScheme.BASIC)).getOrElse(WS.url(url))
+    val req = WS.url(url)
+    if (user.isEmpty || pass.isEmpty) req
+    else req.withAuth(user.get, pass.get, com.ning.http.client.Realm.AuthScheme.BASIC)
   }
 
   //  2011-05-18T15:37:07.000+0200
@@ -165,27 +167,37 @@ object IssueLink extends Common {
         in <- (optField(json)("inwardIssue"));
         in <- in.asOpt[JsObject]
       ) yield (in \ "key").asOpt[String]).orElse(Some(None))
-    ) yield IssueLink(name, outward, outwardIssue, inward, inwardIssue))
-  }
-}
-case class IssueLink(name: String, outward: String, outwardIssue: Option[String], inward: String, inwardIssue: Option[String]) {
-  // assert:
-  (name, outward, inward) match {
-    case ("Relates", "relates to", "relates to")         =>
-    case ("Duplicate", "is duplicated by", "duplicates") =>
-    case ("Duplicate", "duplicates", "is duplicated by") =>
-    case ("Blocks", "is blocked by", "blocks")           =>
-    case ("Blocks", "blocks", "is blocked by")           =>
-    case ("Cloners", "is cloned by", "clones")           =>
-    case ("Cloners", "clones", "is cloned by")           =>
+    ) yield IssueLink(IssueLinkType(name, outward, inward), outwardIssue, inwardIssue))
   }
 }
 
+
+object IssueLinkType {
+  def apply(name: String, outward: String, inward: String) =
+    (name, outward, inward) match {
+      case ("Relates", "relates to", "relates to")         => Relates
+      case ("Duplicate", "is duplicated by", "duplicates") => Duplicates(false)
+      case ("Duplicate", "duplicates", "is duplicated by") => Duplicates(true)
+      case ("Blocks", "is blocked by", "blocks")           => Blocks(false)
+      case ("Blocks", "blocks", "is blocked by")           => Blocks(true)
+      case ("Cloners", "is cloned by", "clones")           => Clones(false)
+      case ("Cloners", "clones", "is cloned by")           => Clones(true)
+    }
+}
+sealed class IssueLinkType(val name: String, val outward: String, val inward: String, val flipped: Boolean = false)
+
+object Relates extends IssueLinkType("Relates", "relates to", "relates to")
+case class Duplicates(override val flipped: Boolean) extends IssueLinkType("Duplicate", "is duplicated by", "duplicates", flipped)
+case class Blocks(override val flipped: Boolean) extends IssueLinkType("Blocks", "is blocked by", "blocks", flipped)
+case class Clones(override val flipped: Boolean) extends IssueLinkType("Cloners", "is cloned by", "clones", flipped)
+
+case class IssueLink(kind: IssueLinkType, outwardIssue: Option[String], inwardIssue: Option[String])
+
 /** to experiment from the play console:
  *
- *  new play.core.StaticApplication(new java.io.File("."))
- *  import util.jira.rest._
- *  val issues = concurrent.Await.result(api.issues, concurrent.duration.Duration.Inf)
+   new play.core.StaticApplication(new java.io.File("."))
+   import util.jira.rest._
+   val issues = concurrent.Await.result(api.issues, concurrent.duration.Duration.Inf)
  *
  */
 object api extends Common {
@@ -248,7 +260,7 @@ object api extends Common {
               println(s"issue does not exist: $i ($e)")
               Future.successful(None)
             case e =>
-              println(s"MEH: $i with $e (cause: e.getCause())")
+              println(s"MEH: $i with $e (cause: ${e.getCause()})")
               e.printStackTrace()
               download(retries - 1)
           }
@@ -336,12 +348,12 @@ object api extends Common {
       case "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[Watch]]
 
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
-//      case "customfield_10101" => v.asOpt[List[String]] // flagged -- never set
-//      case "customfield_10104" => v.asOpt[Float] // Story points
-//      case "customfield_10105" => v.asOpt[Float] // business value
+      case "customfield_10101" => v.asOpt[List[String]] // flagged -- never set
+      //      case "customfield_10104" => v.asOpt[Float] // Story points
+      //      case "customfield_10105" => v.asOpt[Float] // business value
       case "subtasks" =>
         assert(v.as[List[JsValue]].isEmpty, "subtasks not supported"); v
-//      case "workratio" => v.asOpt[Float] // always -1
+      case "workratio" => v.asOpt[Float] // always -1
     } catch {
       case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
     })

@@ -1,4 +1,4 @@
-package util.jira.rest
+package bbj
 
 import play.api.libs.ws.{ WS, Response }
 import play.api.libs.json.{ JsValue, Json, JsNull, Reads, JsSuccess, JsError, JsPath, JsResultException }
@@ -16,49 +16,28 @@ import java.io.InputStream
 import java.io.FileOutputStream
 import scala.collection.mutable.ArrayBuffer
 
-trait Common {
-  implicit lazy val defaultContext: scala.concurrent.ExecutionContext = play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-  def getString(x: String) = play.api.Play.current.configuration.getString(x)
+/* to experiment from the play console:
 
+  new play.core.StaticApplication(new java.io.File("."))
+  import bbj._
+  object jira extends JiraConnection { val issues = new Issues {} }
+  import jira.issues._
+  val issues = concurrent.Await.result(jira.allIssues, concurrent.duration.Duration.Inf)
+  issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]])
+
+*/
+trait JiraConnection extends JsonConnection {
   lazy val user = getString("jira.user")
   lazy val pass = getString("jira.password")
 
-  // try to authorize, or fall back to non-auth
-  // need to authorize to get voters & watchers, apparently...
-  def tryAuthUrl(url: String) = {
-    val req = WS.url(url)
-    if (user.isEmpty || pass.isEmpty) req
-    else req.withAuth(user.get, pass.get, com.ning.http.client.Realm.AuthScheme.BASIC)
-  }
+  def lastIssue: Int = 6000
 
-  //  2011-05-18T15:37:07.000+0200
-  implicit val dateRead = Reads.dateReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+  val issues: Issues
+  import issues._
 
-  def validate[T](tp: String)(x: Option[T]): JsResult[T] =
-    x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected." + tp))))
 
-  def optField(x: JsValue)(name: String): Option[JsValue] = x match {
-    case o: JsObject => o.value.get(name)
-    case _           => None
-  }
-
-  def name(json: JsValue) = (json \ "name").asOpt[String]
-  def self(json: JsValue) = (json \ "self").asOpt[String]
-  def id(json: JsValue) = (json \ "id").asOpt[String] map Integer.parseInt
-
-  def lazyList[T](json: JsValue, countField: String, elemsField: String)(implicit creator: Reads[T]): Future[List[T]] =
-    if ((json \ countField).as[Int] == 0) Future.successful(Nil)
-    else {
-      val self = (json \ "self").as[String]
-      tryAuthUrl(self).get().map { req =>
-        (req.json \ elemsField).as[List[T]]
-      }
-    }
-}
-
-object User extends Common {
-  implicit object reads extends Reads[User] {
+  implicit object readUser extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
       self <- self(json);
       name <- name(json);
@@ -74,47 +53,48 @@ object User extends Common {
   }
 
   private val users = collection.mutable.HashMap[String, User]()
-  def apply(self: String, name: String, displayName: String, emailAddress: String) =
-    users.synchronized { users.getOrElseUpdate(self, new User(self, name, displayName, cleanEmail(emailAddress))) }
+  def User(self: String, name: String, displayName: String, emailAddress: String) =
+    users.synchronized {
+      users.getOrElseUpdate(self, new User(name, displayName, cleanEmail(emailAddress)) {
+        val groupsFuture = tryAuthUrl(self + "&expand=groups").get().map { req => (req.json \ "groups" \\ "name").map(_.as[String]).toList }
+        lazy val groups: List[String] = Await.result(groupsFuture, Duration.Inf)
+      })
+    }
 
   def allUsers = users.values
-}
-case class User(self: String, name: String, displayName: String, emailAddress: Option[String]) {
-  import User._
-  lazy val groups = tryAuthUrl(self + "&expand=groups").get().map { req => (req.json \ "groups" \\ "name") }
-  override def toString = displayName
-}
 
-/*
+  /*
 issues.flatMap(_.fields("versions").asInstanceOf[List[Version]]).toSet
 Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Scala 2.11.0, Scala 2.10.0-M3, Scala 2.10.0-RC5, Scala 2.9.0,
     Scala 2.9.1, Scala 2.10.0-M5, Scala 2.9.3-RC1, Scala 2.10.0-RC2, Scala 2.7.7, Scala 2.9.0-1, Scala 2.10.0-M6, Scala 2.10.1-RC1, Scala 2.10.0-M2, Scala 2.10.0-M1, Scala 2.8.0, macro-paradise, Scala 2.11.0-M1, Scala 2.10.0-RC1, Scala 2.10.0-RC3)
  */
-object Version extends Common {
-  implicit object reads extends Reads[Version] {
+  implicit object readVersion extends Reads[Version] {
     def reads(json: JsValue): JsResult[Version] = validate(s"version; got $json")(for (
       self <- self(json);
-      id <- id(json);
       name <- name(json);
+      description <- (optField(json)("description")).map(_.asOpt[String]).orElse(Some(None));
       userReleaseDate <- (optField(json)("userReleaseDate")).map(_.asOpt[String]).orElse(Some(None));
       releaseDate <- (optField(json)("releaseDate")).map(_.asOpt[Date](Reads.DefaultDateReads)).orElse(Some(None));
       archived <- (json \ "archived").asOpt[Boolean];
       released <- (json \ "released").asOpt[Boolean]
-    ) yield Version(self, id, name, userReleaseDate, releaseDate, archived, released))
+    ) yield Version(self, name, description, userReleaseDate, releaseDate, archived, released))
+  }
+
+  private def parseUserReleaseDate(d: String): Option[Date] = {
+    val df = new java.text.SimpleDateFormat("d/MMM/yy")
+    df.setLenient(false)
+    try { Some(df.parse(d)) } catch {
+      case _: java.text.ParseException => None
+    }
   }
 
   private val versions = collection.mutable.HashMap[String, Version]()
-  def apply(self: String, id: Int, name: String, userReleaseDate: Option[String], releaseDate: Option[Date], archived: Boolean, released: Boolean) =
-    versions.synchronized { versions.getOrElseUpdate(self, new Version(self, id, name, userReleaseDate, releaseDate, archived, released)) }
+  def Version(self: String, name: String, description: Option[String], userReleaseDate: Option[String], releaseDate: Option[Date], archived: Boolean, released: Boolean) =
+    versions.synchronized { versions.getOrElseUpdate(self, new Version(name, description, releaseDate orElse userReleaseDate.flatMap(parseUserReleaseDate), archived, released)) }
 
   def allVersions = versions.values
-}
-class Version(val self: String, val id: Int, val name: String, val userReleaseDate: Option[String], val releaseDate: Option[Date], val archived: Boolean, val released: Boolean) {
-  override def toString = name
-}
 
-object Comment extends Common {
-  implicit object reads extends Reads[Comment] {
+  implicit object readComment extends Reads[Comment] {
     def reads(json: JsValue): JsResult[Comment] = validate(s"comment; got $json")(for (
       author <- (json \ "author").asOpt[User];
       body <- (json \ "body").asOpt[String];
@@ -123,13 +103,8 @@ object Comment extends Common {
       updated <- (json \ "updated").asOpt[Date]
     ) yield Comment(author, body, updateAuthor, created, updated))
   }
-}
-case class Comment(author: User, body: String, updateAuthor: User, created: Date, updated: Date) {
-  override def toString = s"on $created, $author said '$body' ($updated, $updateAuthor)"
-}
 
-object Attachment extends Common {
-  implicit object reads extends Reads[Attachment] {
+  implicit object readAttachment extends Reads[Attachment] {
     def reads(json: JsValue): JsResult[Attachment] = validate(s"attachment; got $json")(for (
       filename <- (json \ "filename").asOpt[String];
       author <- (json \ "author").asOpt[User];
@@ -138,23 +113,20 @@ object Attachment extends Common {
       mimeType <- (json \ "mimeType").asOpt[String];
       properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
       content <- (json \ "content").asOpt[String]
-    ) yield Attachment(filename, author, created, content, size, mimeType, properties))
+    ) yield Attachment(filename, author, created, content, size, mimeType, properties map(_.value.toMap) getOrElse Map()))
   }
-}
-case class Attachment(filename: String, author: User, created: Date, content: String, size: Int, mimeType: String, properties: Option[JsObject])
 
-/** scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.name)).distinct
- *  Vector(Relates, Duplicate, Blocks, Cloners)
- *
- *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.inward)).distinct
- *  Vector(relates to, is duplicated by, is blocked by, is cloned by)
- *
- *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.outward)).distinct
- *  Vector(relates to, duplicates, blocks, clones)
- *
- */
-object IssueLink extends Common {
-  implicit object reads extends Reads[IssueLink] {
+  /** scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.name)).distinct
+   *  Vector(Relates, Duplicate, Blocks, Cloners)
+   *
+   *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.inward)).distinct
+   *  Vector(relates to, is duplicated by, is blocked by, is cloned by)
+   *
+   *  scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.outward)).distinct
+   *  Vector(relates to, duplicates, blocks, clones)
+   *
+   */
+  def readIssueLink(selfKey: String): Reads[IssueLink] = new Reads[IssueLink] {
     def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for (
       name <- name(json \ "type");
       inward <- (json \ "type" \ "inward").asOpt[String];
@@ -167,40 +139,23 @@ object IssueLink extends Common {
         in <- (optField(json)("inwardIssue"));
         in <- in.asOpt[JsObject]
       ) yield (in \ "key").asOpt[String]).orElse(Some(None))
-    ) yield IssueLink(IssueLinkType(name, outward, inward), outwardIssue, inwardIssue))
+    ) yield {
+      val ilt = IssueLinkType(name, inward, outward)
+      (inwardIssue, outwardIssue) match {
+        case (Some(i), None) => IssueLink(ilt, i, selfKey) // read as: s"$i ${ilt.name} $selfKey"
+        case (None, Some(o)) => IssueLink(ilt, selfKey, o) // read as: s"$selfKey ${ilt.name} $o"
+      }
+    })
   }
-}
 
-
-object IssueLinkType {
-  def apply(name: String, outward: String, inward: String) =
-    (name, outward, inward) match {
+  def IssueLinkType(name: String, inward: String, outward: String) =
+    (name, inward, outward) match {
       case ("Relates", "relates to", "relates to")         => Relates
-      case ("Duplicate", "is duplicated by", "duplicates") => Duplicates(false)
-      case ("Duplicate", "duplicates", "is duplicated by") => Duplicates(true)
-      case ("Blocks", "is blocked by", "blocks")           => Blocks(false)
-      case ("Blocks", "blocks", "is blocked by")           => Blocks(true)
-      case ("Cloners", "is cloned by", "clones")           => Clones(false)
-      case ("Cloners", "clones", "is cloned by")           => Clones(true)
+      case ("Duplicate", "is duplicated by", "duplicates") => Duplicates
+      case ("Blocks", "is blocked by", "blocks")           => Blocks
+      case ("Cloners", "is cloned by", "clones")           => Clones
     }
-}
-sealed class IssueLinkType(val name: String, val outward: String, val inward: String, val flipped: Boolean = false)
 
-object Relates extends IssueLinkType("Relates", "relates to", "relates to")
-case class Duplicates(override val flipped: Boolean) extends IssueLinkType("Duplicate", "is duplicated by", "duplicates", flipped)
-case class Blocks(override val flipped: Boolean) extends IssueLinkType("Blocks", "is blocked by", "blocks", flipped)
-case class Clones(override val flipped: Boolean) extends IssueLinkType("Cloners", "is cloned by", "clones", flipped)
-
-case class IssueLink(kind: IssueLinkType, outwardIssue: Option[String], inwardIssue: Option[String])
-
-/** to experiment from the play console:
- *
-   new play.core.StaticApplication(new java.io.File("."))
-   import util.jira.rest._
-   val issues = concurrent.Await.result(api.issues, concurrent.duration.Duration.Inf)
- *
- */
-object api extends Common {
   private def readFully(in: InputStream, bufferSize: Int = 1024): Array[Byte] = {
     val bytes = new Array[Byte](bufferSize)
     val contents = ArrayBuffer[Byte]()
@@ -268,8 +223,8 @@ object api extends Common {
     }
   }
 
-  lazy val issues: Future[IndexedSeq[Issue]] =
-    Future.sequence { (1 to 6882).map { getIssue } }.map(_.flatten)
+  lazy val allIssues: Future[IndexedSeq[Issue]] =
+    Future.sequence { (1 to lastIssue).map { getIssue } }.map(_.flatten)
 
   def parseIssue(data: Array[Byte]): Issue = parseIssue(Json.parse(new String(data)))
   def parseIssue(i: JsValue): Issue =
@@ -278,47 +233,13 @@ object api extends Common {
         if (errorMessages contains "Issue Does Not Exist") throw new NoSuchElementException(errorMessages.mkString("\n"))
         else throw new IllegalArgumentException(errorMessages.mkString("\n"))
       case None =>
+        val selfKey = (i \ "key").as[String]
         Issue(
-          (i \ "key").as[String],
-          (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(k, v) },
-          (i \ "changelog" \ "histories").as[List[JsValue]])
+          selfKey,
+          (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(selfKey, k, v) }) // , (i \ "changelog" \ "histories").as[List[JsValue]])
     }
 
-  // TODO
-  def componentToLabel(c: String): String = c match {
-    case "Scaladoc Tool"          => "Scaladoc Tool"
-    case "Misc Compiler"          => "Misc Compiler"
-    case "Misc Library"           => "Misc Library"
-    case "Specification"          => "Specification"
-    case "Eclipse Plugin (EOL)"   => "Eclipse Plugin (EOL)"
-    case "Packaging"              => "Packaging"
-    case "Documentation and API"  => "Documentation and API"
-    case "Repl / Interpreter"     => "Repl / Interpreter"
-    case "Pattern Matcher"        => "Pattern Matcher"
-    case "Build, Developer Tools" => "Build, Developer Tools"
-    case "XML Support"            => "XML Support"
-    case "Jira"                   => "Jira"
-    case "Website"                => "Website"
-    case "Actors Library"         => "Actors Library"
-    case "MSIL Backend"           => "MSIL Backend"
-    case "Parser Combinators"     => "Parser Combinators"
-    case "Enumeration"            => "Enumeration"
-    case "Type Checker"           => "Type Checker"
-    case "Swing Library"          => "Swing Library"
-    case "Continuations"          => "Continuations"
-    case "Collections"            => "Collections"
-    case "Specialization"         => "Specialization"
-    case "Type Inference"         => "Type Inference"
-    case "Reflection"             => "Reflection"
-    case "Optimizer"              => "Optimizer"
-    case "Compiler Backend"       => "Compiler Backend"
-    case "Presentation Compiler"  => "Presentation Compiler"
-    case "Macros"                 => "Macros"
-    case "Concurrent Library"     => "Concurrent Library"
-    case "Partest"                => "Partest"
-  }
-
-  def parseField(field: String, v: JsValue): (String, Any) = (field,
+  def parseField(selfKey: String, field: String, v: JsValue): (String, Any) = (field,
     try field match {
       case "project"           => (v \ "key").as[String] // Project
       case "issuekey"          => v.as[String]
@@ -339,13 +260,13 @@ object api extends Common {
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
       case "labels"            => v.as[List[String]]
-      case "issuelinks"        => v.as[List[IssueLink]]
-      case "components"        => v.as[List[JsObject]].map(c => componentToLabel((c \ "name").as[String]))
+      case "issuelinks"        => implicit val readIL = readIssueLink(selfKey); v.as[List[IssueLink]]
+      case "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
       case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
       case "attachment"        => v.as[List[Attachment]]
 
-      case "votes"             => lazyList[User](v, "votes", "voters") // Future[List[Vote]]
-      case "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[Watch]]
+      case "votes"             => lazyList[User](v, "votes", "voters") // Future[List[User]]
+      case "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[User]]
 
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
       case "customfield_10101" => v.asOpt[List[String]] // flagged -- never set
@@ -358,6 +279,3 @@ object api extends Common {
       case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
     })
 }
-
-// TODO: scalac bug, why does this have to come after the companion object?
-case class Issue(key: String, fields: Map[String, Any], changelog: List[JsValue])

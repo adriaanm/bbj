@@ -16,7 +16,6 @@ import java.io.InputStream
 import java.io.FileOutputStream
 import scala.collection.mutable.ArrayBuffer
 
-
 /* to experiment from the play console:
 
   new play.core.StaticApplication(new java.io.File("."))
@@ -31,17 +30,16 @@ trait JiraConnection extends JsonConnection {
   lazy val user = getString("jira.user")
   lazy val pass = getString("jira.password")
 
-  def lastIssue: Int = 6000
+  def lastIssue: Int = 6685
 
   val issues: Issues
   import issues._
-
 
   implicit object readUser extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
       self <- self(json);
       name <- name(json);
-      emailAddress <- (json \ "emailAddress").asOpt[String];
+      emailAddress <- (optField(json)("emailAddress")).map(_.asOpt[String]).orElse(Some(None));  // don't get this field when reading voters/watchers from a lazy list
       displayName <- (json \ "displayName").asOpt[String]
     ) yield User(self, name, displayName, emailAddress))
   }
@@ -53,12 +51,10 @@ trait JiraConnection extends JsonConnection {
   }
 
   private val users = collection.mutable.HashMap[String, User]()
-  def User(self: String, name: String, displayName: String, emailAddress: String) =
+  def User(self: String, name: String, displayName: String, emailAddress: Option[String]) =
     users.synchronized {
-      users.getOrElseUpdate(self, new User(name, displayName, cleanEmail(emailAddress)) {
-        val groupsFuture = tryAuthUrl(self + "&expand=groups").get().map { req => (req.json \ "groups" \\ "name").map(_.as[String]).toList }
-        lazy val groups: List[String] = Await.result(groupsFuture, Duration.Inf)
-      })
+      users.getOrElseUpdate(self, new User(name, displayName, emailAddress.flatMap(cleanEmail))(
+          tryAuthUrl(self + "&expand=groups").get().map { req => (req.json \ "groups" \\ "name").map(_.as[String]).toList }))
     }
 
   def allUsers = users.values
@@ -113,7 +109,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       mimeType <- (json \ "mimeType").asOpt[String];
       properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
       content <- (json \ "content").asOpt[String]
-    ) yield Attachment(filename, author, created, content, size, mimeType, properties map(_.value.toMap) getOrElse Map()))
+    ) yield Attachment(filename, author, created, content, size, mimeType, properties map (_.value.toMap) getOrElse Map()))
   }
 
   /** scala> issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]].map(_.name)).distinct
@@ -184,6 +180,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
   private def fileFor(key: Int) = new File(s"$cacheDir/${key}.json")
   private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
 
+  
   def getIssue(i: Int): Future[Option[Issue]] = {
     def loadCachedIssue =
       Future(Some {
@@ -260,7 +257,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
       case "labels"            => v.as[List[String]]
-      case "issuelinks"        => implicit val readIL = readIssueLink(selfKey); v.as[List[IssueLink]]
+      case "issuelinks"        =>
+        implicit val readIL = readIssueLink(selfKey); v.as[List[IssueLink]]
       case "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
       case "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
       case "attachment"        => v.as[List[Attachment]]

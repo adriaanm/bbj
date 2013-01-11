@@ -5,8 +5,7 @@ import java.util.Date
 trait Issues {
   case class Project(projectId: String, name: String, description: String, lead: User, startingNumber: Int = 1)
 
-  abstract case class User(name: String, displayName: String, emailAddress: Option[String]) {
-    def groups: List[String]
+  case class User(name: String, displayName: String, emailAddress: Option[String])(val groups: concurrent.Future[List[String]]) {
     override def toString = displayName
   }
 

@@ -114,8 +114,16 @@ trait TranslateJiraToYouTrack extends Issues {
     }))
   }
 
+  def validUserName(name: String) = !name.contains(" ")
+  def cleanUserName(name: String) = name.replace(" ", "_")
+  val BOGUS_EMAIL = "bogus@empty.in.jira"
+
+  // TODO: is the user transform done consistently?
   object jiraToYouTrack extends IssuesTransform {
-    def apply(x: User): User = x
+    def apply(x: User): User = x match {
+      case User(id, dn, Some(em)) if validUserName (id) => x
+      case User(id, dn, em) => User(cleanUserName(id), dn, em orElse Some(BOGUS_EMAIL))(x.groups)
+    }
     def apply(x: Version): Version = x
     def apply(x: IssueLinkType): IssueLinkType = x
 

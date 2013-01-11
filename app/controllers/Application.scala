@@ -7,11 +7,13 @@ import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import bbj.JiraConnection
 import bbj.Issues
+import play.api.libs.json.JsValue
+import play.api.libs.ws.WS
 
 object Application extends Controller {
   import play.api.libs.concurrent.Execution.Implicits._
 
-  object jira extends JiraConnection { val issues = new Issues{} }
+  object jira extends JiraConnection { val issues = new Issues {} }
   import jira.allIssues
   import jira.issues._
 

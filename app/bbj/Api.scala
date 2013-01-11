@@ -30,7 +30,7 @@ trait JiraConnection extends JsonConnection {
   lazy val user = getString("jira.user")
   lazy val pass = getString("jira.password")
 
-  def lastIssue: Int = 6685
+  def lastIssue: Int = 2000
 
   val issues: Issues
   import issues._
@@ -233,13 +233,13 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
         val selfKey = (i \ "key").as[String]
         Issue(
           selfKey,
-          (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(selfKey, k, v) }) // , (i \ "changelog" \ "histories").as[List[JsValue]])
+          (i \ "fields").as[Map[String, JsValue]].map { case (k, v) => parseField(selfKey, k, v) } + ("issuekey" -> selfKey)) // , (i \ "changelog" \ "histories").as[List[JsValue]])
     }
 
   def parseField(selfKey: String, field: String, v: JsValue): (String, Any) = (field,
     try field match {
       case "project"           => (v \ "key").as[String] // Project
-      case "issuekey"          => v.as[String]
+      case "issuekey"          => v.as[String] // not normally parsed -- overridden in parseIssue
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
       case "created"           => v.as[Date]

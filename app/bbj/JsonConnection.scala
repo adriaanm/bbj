@@ -52,7 +52,8 @@ trait JsonConnection {
     else {
       val self = (json \ "self").as[String]
       tryAuthUrl(self).get().map { req =>
-        (req.json \ elemsField).as[List[T]]
+        try {  (req.json \ elemsField).as[List[T]] }
+        catch { case x: Exception => println(s"failed to parse list $elemsField in ${req.json} "); Nil }
       }
     }
 }

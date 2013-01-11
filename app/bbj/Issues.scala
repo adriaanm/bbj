@@ -47,6 +47,7 @@ trait Issues {
         case ilt: IssueLinkType              => apply(ilt)
         case IssueLink(ilt, o, i)            => IssueLink(apply(ilt), o, i)
         case Issue(key, fields)              => Issue(key, fields map { case (k, v) => (k, mapOver(v)) })
+        case xs: Iterable[Any]               => xs.map(mapOver)
         case x                               => x
       }
     }

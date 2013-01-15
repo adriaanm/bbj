@@ -1,40 +1,87 @@
 package bbj
 import java.util.Date
-
-/** 
- * new play.core.StaticApplication(new java.io.File("."))
-import bbj._
-import migrate._
 import concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{Await, Future}
+import scala.concurrent.{ Await, Future }
 import scala.concurrent.duration.Duration
 import scala.concurrent.Await.result
-import issueTranslation.jiraToYouTrack
 
-def getIssues(from: Int, to: Int) = result(Future.sequence { (from to to).map { jira.getIssue } }.map(_.flatten), Duration.Inf)
-
-val translated = getIssues(1, 500).map(jiraToYouTrack.mapOver).asInstanceOf[Seq[youTrack.issues.Issue]]
-
-translated.flatMap(_.fields("fixedVersion").asInstanceOf[List[youTrack.issues.Version]])
-res12 map (v => youTrack.createVersion("SI", v))
-
-result(youTrack.importIssues("SI", translated), Duration.Inf).ahcResponse.getResponseBody
-
-
-val allIssues = result(jira.allIssues, Duration.Inf)
-val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map{case (k, vs) => (k, vs.map(_._2).distinct)}
-allFieldValues.keys
-
-allFieldValues("labels").asInstanceOf[Vector[List[String]]].flatten.distinct
+/** new play.core.StaticApplication(new java.io.File("."))
+ *  concurrent.Await.result(bbj.migrate.migrateScalaUntil(500), concurrent.duration.Duration.Inf)
+ *
+ *  import bbj._
+ *  import migrate._
+ *  import concurrent.ExecutionContext.Implicits.global
+ *  import scala.concurrent.{Await, Future}
+ *  import scala.concurrent.duration.Duration
+ *  import scala.concurrent.Await.result
+ *  import issueTranslation.jiraToYouTrack
+ *
+ *  def getIssues(from: Int, to: Int) = result(Future.sequence { (from to to).map { jira.getIssue } }.map(_.flatten), Duration.Inf)
+ *
+ *  val translated = getIssues(1, 500).map(jiraToYouTrack.mapOver).asInstanceOf[Seq[youTrack.issues.Issue]]
+ *
+ *  translated.flatMap(_.fields("fixedVersion").asInstanceOf[List[youTrack.issues.Version]])
+ *  res12 map (v => youTrack.createVersion("SI", v))
+ *
+ *  result(youTrack.importIssues("SI", translated), Duration.Inf).ahcResponse.getResponseBody
+ *
+ *
+ *  val allIssues = result(jira.allIssues, Duration.Inf)
+ *  val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map{case (k, vs) => (k, vs.map(_._2).distinct)}
+ *  allFieldValues.keys
+ *
+ *  allFieldValues("labels").asInstanceOf[Vector[List[String]]].flatten.distinct
  */
 object migrate {
-  object issueTranslation extends TranslateJiraToYouTrack
-
   val jira = new JiraConnection { val issues = issueTranslation }
   val youTrack = new YouTrackConnection { val issues = issueTranslation }
 
-  val addToStatesBundle = List("Backport Pending", "Not a Bug")
-  /*def create_value(target, value, field_name, field_type, project_id):
+  object issueTranslation extends TranslateJiraToYouTrack {
+    val separateFieldJira = Set("status", "project", "labels", "issuelinks", "components", "attachment", "customfield_10005")
+    def xFieldName(n: String): Option[String] = n match {
+      case n if separateFieldJira(n) => None // not used or treated separately
+
+      case "issuekey"                => Some("numberInProject")
+      case "summary"                 => Some(n)
+      case "reporter"                => Some("reporterName")
+      case "created"                 => Some(n)
+      case "updated"                 => Some(n)
+      case "issuetype"               => Some("type")
+      case "priority"                => Some(n)
+
+      case "assignee"                => Some("assigneeName")
+      case "description"             => Some(n)
+      case "environment"             => Some(n) // custom
+      case "resolution"              => Some("state")
+      case "resolutiondate"          => Some("resolved")
+      case "versions"                => Some("affectsVersion")
+      case "fixVersions"             => Some("fixedVersion")
+      case "comment"                 => Some("comment")
+
+      case "votes"                   => Some("voterName")
+      case "watches"                 => Some("watcherName") // also includes customfield_10005
+
+      // customfield_10101, duedate, subtasks, workratio
+      case _                         => println(s"IGNORING FIELD $n"); None
+
+    }
+  }
+
+  import concurrent.ExecutionContext.Implicits.global
+  import issueTranslation.{ Issue, Project, User, Version, jiraToYouTrack }
+
+  def createFieldTypes(projectId: String, allIssues: Seq[Issue]) = {
+    val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }.toMap
+    // a new youtrack project already has all these fields -- TODO: determined dynamically
+    val builtin = Set("assigneeName", "created", "summary", "description", "type", "priority", "reporterName", "state", "resolved", "updated", "watcherName", "voterName")
+    val unused = allFieldValues.filter { case (k, v) => v.size <= 1 }.keys.toSet
+    val fieldTypesToCreate = allFieldValues.keys.toSet -- unused -- builtin
+    //Set("environment", "status", "fixVersions", "versions")
+
+    def createVersions(versions: Seq[Version]) =
+      Future.sequence(versions map (youTrack.createVersion(projectId, _)))
+
+    /*def create_value(target, value, field_name, field_type, project_id):
     if field_type.startswith('user'):
         create_user(target, value)
         value['name'] = value['name'].replace(' ', '_')
@@ -60,50 +107,42 @@ object migrate {
             target.addValueToBundle(bundle, value['value'])
     except YouTrackException:
         pass*/
-  import concurrent.ExecutionContext.Implicits.global
-
-  val allFieldValues = for (issues <- jira.allIssues) yield issues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }
-  def createFieldTypes = {
-    def createFieldType(fieldName: String, possibleValues: Iterable[Any]) = fieldName match {
+    def createFieldType(fieldName: String) = fieldName match {
       // new
-      case "votes"             => // TODO
-      case "watches"           => // TODO
-      case "environment"       => // TODO
-      case "status"            => // needs new value: "Not a Bug"
-      case "fixVersions"       => // populate with values
-      case "versions"          => // populate with values
-      
-      // builtin
-      case "assignee"          =>
-      case "created"           =>
-      case "summary"           =>
-      case "description"       =>
-      case "issuetype"         =>
-      case "priority"          =>
-      case "reporter"          =>
-      case "resolution"        =>
-      case "resolutiondate"    =>
-      case "updated"           =>
-
-      // separate
-      case "attachment"        =>
-      case "comment"           =>
-      case "components"        =>
-      case "customfield_10005" =>
-      case "issuelinks"        =>
-      case "labels"            =>
-      case "project"           =>
-        
-      // unused
-      case "customfield_10101" =>
-      case "subtasks"          =>
-      case "duedate"           =>
-      case "workratio"         =>
+      case "environment" =>
+        youTrack.createCustomField(None, "field", fieldName, youTrack.field.params(
+          typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = false, emptyFieldText = "Undefined"): _*).map(Seq(_))
+        youTrack.createCustomField(Some(projectId), "field", fieldName, youTrack.field.params(
+          typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = true, emptyFieldText = "Undefined"): _*).map(Seq(_))
+      case "state" =>
+        youTrack.createCustomField(Some(projectId), "stateBundle", "Not a Bug", ("isResolved", "false"), ("description", "This is not a bug")).map(Seq(_))
+      case "affectsVersion" | "fixedVersion" =>
+        createVersions(allFieldValues(fieldName).asInstanceOf[Seq[Seq[Version]]].flatten)
+      case _ => println("field type: " + fieldName); Future.successful(Nil)
     }
+
+    Future.sequence(fieldTypesToCreate.map(createFieldType)).map(_.flatten)
   }
+
+  def migrateIssues(projectId: String, translated: Seq[Issue]) = for {
+    fieldCreation <- createFieldTypes(projectId, translated)
+    req <- youTrack.importIssues(projectId, translated)
+  } yield (fieldCreation, req.ahcResponse.getResponseBody)
+
+  def migrateProject(p: Project, from: Int, to: Int) = for {
+    (translated, allUsers) <- for (issues <- Future.sequence { (from to to).map { jira.getIssue(p.projectId, _) } })
+      yield (issues.flatten.map(jiraToYouTrack.mapOver).asInstanceOf[Seq[Issue]], jira.allUsers)
+    userImport <- youTrack.importUsers(allUsers map (jiraToYouTrack.apply _))
+    project <- youTrack.createProject(p)
+    (fieldCreation, issueImport) <- migrateIssues(p.projectId, translated)
+  } yield (userImport, project, fieldCreation, issueImport)
+
+  def migrateScalaUntil(to: Int) = migrateProject(Project("SI", "Scala", "The Scala Programming Language", "guest"), 1, to) // TODO: set lead to "odersky"
+
 }
 
 trait TranslateJiraToYouTrack extends Issues {
+  def xFieldName(n: String): Option[String]
 
   // KEY: issuetype has VALUES: Vector(Bug, Improvement, Suggestion, New Feature)
   def xType(t: String): String = t match {
@@ -171,41 +210,6 @@ trait TranslateJiraToYouTrack extends Issues {
     case "Partest"                => "Partest"
   }
 
-  // TODO: determine unusedField dynamically
-  //  scala> val allFieldValues = issues.flatMap(_.fields).groupBy(_._1).map{case (k, vs) => (k, vs.map(_._2).distinct)}
-  //  scala> allFieldValues.filter(_._2.size <= 1).keys
-  //    res45: Iterable[String] = Set(duedate, customfield_10101, subtasks, workratio)
-  val unusedField = Set("duedate", "customfield_10101", "subtasks", "workratio")
-  val separateField = Set("status", "project", "labels", "issuelinks", "components", "attachment", "customfield_10005")
-
-  // Set(priority, assignee, votes, issuelinks, reporter, project, description, versions, duedate, fixVersions, customfield_10101, components, 
-  // resolutiondate, watches, updated, subtasks, labels, resolution, status, comment, environment, attachment, customfield_10005, issuetype, summary, workratio, created)
-  def xFieldName(n: String): Option[String] = n match {
-    case n if unusedField(n) | separateField(n) => None // not used or treated separately
-
-    case "issuekey"                             => Some("numberInProject")
-    case "summary"                              => Some(n)
-    case "reporter"                             => Some("reporterName")
-    case "created"                              => Some(n)
-    case "updated"                              => Some(n)
-    case "issuetype"                            => Some("type")
-    case "priority"                             => Some(n)
-
-    case "assignee"                             => Some("assigneeName")
-    case "description"                          => Some(n)
-    case "environment"                          => None // TODO: Some(n) // custom
-    case "resolution"                           => Some("state")
-    case "resolutiondate"                       => Some("resolved")
-    case "versions"                             => Some("affectsVersion")
-    case "fixVersions"                          => Some("fixedVersion")
-    case "comment"                              => Some("comment")
-
-    case "votes"                                => None // TODO: Some("voterName")
-    case "watches"                              => None // TODO: Some("watcherName") // also includes customfield_10005
-
-    case _                                      => println(s"IGNORING FIELD $n"); None
-  }
-
   def xField(n: String, v: Any) = {
     xFieldName(n) map (n => (n, (n, v) match {
       case ("numberInProject", n: String) => n.split("-")(1)
@@ -218,7 +222,7 @@ trait TranslateJiraToYouTrack extends Issues {
 
   def validUserName(name: String) = !name.contains(" ")
   def cleanUserName(name: String) = name.replace(" ", "_")
-  val BOGUS_EMAIL = "bogus@empty.in.jira"
+  val BOGUS_EMAIL = "email.not@specified"
 
   // TODO: is the user transform done consistently?
   object jiraToYouTrack extends IssuesTransform {

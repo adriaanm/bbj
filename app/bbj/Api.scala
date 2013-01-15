@@ -30,8 +30,6 @@ trait JiraConnection extends JsonConnection {
   lazy val user = getString("jira.user")
   lazy val pass = getString("jira.password")
 
-  def lastIssue: Int = 2000
-
   val issues: Issues
   import issues._
 
@@ -181,7 +179,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
   private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
 
   
-  def getIssue(i: Int): Future[Option[Issue]] = {
+  def getIssue(projectId: String, i: Int): Future[Option[Issue]] = {
     def loadCachedIssue =
       Future(Some {
         val f = fileFor(i)
@@ -191,7 +189,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       })
 
     def downloadIssueAndCache =
-      tryAuthUrl(jiraUrl(s"/issue/SI-${i}?expand=changelog")).get().map { resp =>
+      tryAuthUrl(jiraUrl(s"/issue/$projectId-${i}?expand=changelog")).get().map { resp =>
         val contents = readFully(resp.ahcResponse.getResponseBodyAsStream)
         try Some(parseIssue(contents)) // don't bother writing to disk if it doesn't parse
         finally {
@@ -220,8 +218,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     }
   }
 
-  lazy val allIssues: Future[IndexedSeq[Issue]] =
-    Future.sequence { (1 to lastIssue).map { getIssue } }.map(_.flatten)
+//  lazy val allIssues: Future[IndexedSeq[Issue]] =
+//    Future.sequence { (1 to lastIssue).map { getIssue(projectId, _) } }.map(_.flatten)
 
   def parseIssue(data: Array[Byte]): Issue = parseIssue(Json.parse(new String(data)))
   def parseIssue(i: JsValue): Issue =

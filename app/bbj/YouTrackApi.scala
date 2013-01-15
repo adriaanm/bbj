@@ -15,7 +15,7 @@ trait YouTrackConnection extends JsonConnection {
 
   def warning(s: String) = println(s)
 
-  def url(sub: String) = s"http://localhost:8080/rest/$sub"
+  def url(sub: String) = new java.net.URI("http", null, "localhost", 8080, s"/rest/$sub", null, null).toString
 
   import play.api.mvc.Codec
   implicit def contentTypeOf_Xml(implicit codec: Codec): ContentTypeOf[xml.Elem] = {
@@ -25,8 +25,6 @@ trait YouTrackConnection extends JsonConnection {
     Writeable[xml.Elem](xml => codec.encode(xml.toString))
   }
 
-  def urlEnc(s: String)(implicit codec: Codec) = java.net.URLEncoder.encode(s, codec.charset)
-   
   def executeCommand(issueId: String, command: String, params: (String, String)*) =
     tryAuthUrl(url(s"issue/$issueId/execute")).withQueryString(params: _*).post("")
 
@@ -34,42 +32,49 @@ trait YouTrackConnection extends JsonConnection {
     tryAuthUrl(url("admin/project/") + p.projectId).withQueryString(
       ("projectName", p.name),
       ("description", p.description),
-      ("projectLeadLogin", p.lead.name),
-      ("lead", p.lead.name),
+      ("projectLeadLogin", p.lead),
+      ("lead", p.lead),
       ("startingNumber", p.startingNumber.toString)).put(<empty/>)
 
   def createVersion(projectId: String, v: Version) =
-    tryAuthUrl(url(s"admin/project/$projectId/version/${urlEnc(v.name)}")).withQueryString(
+    tryAuthUrl(url(s"admin/project/$projectId/version/${v.name}")).withQueryString(
       ("description", v.description.getOrElse("")),
+      ("releaseDate", v.releaseDate.map(dateYT).getOrElse("")),
       ("isReleased", v.released.toString),
       ("isArchived", v.archived.toString)).put(<empty/>)
 
   def createIssueLinkType(ilt: IssueLinkType) =
-    tryAuthUrl(url("admin/issueLinkType/") + urlEnc(ilt.name)).withQueryString(
+    tryAuthUrl(url("admin/issueLinkType/${ilt.name}")).withQueryString(
       ("outwardName", ilt.outward),
       ("inwardName", ilt.inward),
       ("directed", ilt.directed.toString)).put(<empty/>)
 
-  def fieldParams(typeName: String, isPrivate: Boolean, defaultVisibility: String, autoAttached: Boolean, emptyFieldText: String, params: (String, String)*) =
-    params.toMap ++ Map(
-        ("type", typeName), 
-        ("isPrivate", isPrivate.toString), 
+  object field {
+    def params(typeName: String, isPrivate: Boolean, defaultVisibility: Boolean, autoAttached: Boolean, emptyFieldText: String, params: (String, String)*) =
+      (params.toMap ++ Map(
+        ("type", typeName),
+        ("isPrivate", isPrivate.toString),
         ("defaultVisibility", defaultVisibility.toString),
         ("autoAttached", autoAttached.toString),
-        ("emptyFieldText", emptyFieldText))
-      
-  def customFieldUrl(projectId: Option[String]) = s"""admin${projectId map ("/project/"+ _) getOrElse "" }/customfield"""
-  def createCustomField(projectId: Option[String], customFieldName: String, params: (String, String)*) = 
-    tryAuthUrl(url("${customFieldUrl(projectId)}/field/${urlEnc(customFieldName)}")).withQueryString(params: _*).put(<empty/>)
-                
+        ("emptyFieldText", emptyFieldText))).toSeq
+  }
+
+  // ignores kindPrefix if projectId is specified
+  def customFieldUrl(projectId: Option[String], kindPrefix: String = "") =
+    s"""admin${projectId map ("/project/" + _) getOrElse ""}/customfield${if (projectId.isEmpty) kindPrefix else ""}"""
+
+  // kind = "field" | bundleName
+  def createCustomField(projectId: Option[String], kind: String, name: String, params: (String, String)*) =
+    tryAuthUrl(url(s"${customFieldUrl(projectId, "/"+kind)}/$name")).withQueryString(params: _*).put(<empty/>)
+
   def customFields(projectId: Option[String]) =
     tryAuthUrl(url(customFieldUrl(projectId))).get().map(req => (req.xml \\ "projectCustomField" \\ "@name").map(_.toString).toList)
-    
+
   def usersToXml(users: Iterable[User]): xml.Elem =
     <list>
       {
         users.flatMap {
-          case User(id, dn, Some(e)) => <user login={ id } fullName={ dn } email={ e }/>
+          case User(id, dn, Some(e))=> <user login={ id } fullName={ dn } email={ e }/>
         }
       }
     </list>
@@ -139,8 +144,8 @@ trait YouTrackConnection extends JsonConnection {
               case "environment"     => opt(f(_))
               case "resolved"        => opt(df(_)) // timestamp  single optional  Issue resolve time
               case "due"             => opt(df(_))
-              case "affectsVersion"  => lf() { case Version(n, _, _, _, _) => urlEnc(n) } // string    multi   optional    Names of versions affected by the issue. See GET Versions
-              case "fixedVersion"    => lf() { case Version(n, _, _, _, _) => urlEnc(n) } // string    multi   optional    Names of versions where the issue is fixed. See GET Versions
+              case "affectsVersion"  => lf() { case Version(n, _, _, _, _) => n } // string    multi   optional    Names of versions affected by the issue. See GET Versions
+              case "fixedVersion"    => lf() { case Version(n, _, _, _, _) => n } // string    multi   optional    Names of versions where the issue is fixed. See GET Versions
               case "subsystem"       => f() //  string    single    optional    Issue subsystem name. See GET Subsystems
 
               case "fixedInBuild"    => f() //  string    single    optional    Name of project build where the issue is fixed. Created if necessary.

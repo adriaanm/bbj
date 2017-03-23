@@ -1,20 +1,12 @@
 package bbj
 
-import play.api.libs.ws.{ WS, Response }
-import play.api.libs.json.{ JsValue, Json, JsNull, Reads, JsSuccess, JsError, JsPath, JsResultException }
-import play.api.data.validation.ValidationError
+import java.io._
 import java.util.Date
-import play.api.libs.json.JsResult
-import scala.concurrent.Future
-import scala.concurrent.Await
-import play.api.libs.json.JsObject
-import scala.concurrent.duration.Duration
-import java.io.FileInputStream
-import java.io.File
-import java.io.DataInputStream
-import java.io.InputStream
-import java.io.FileOutputStream
+
+import play.api.libs.json._
+
 import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.Future
 
 /* to experiment from the play console:
 
@@ -27,8 +19,6 @@ import scala.collection.mutable.ArrayBuffer
 
 */
 trait JiraConnection extends JsonConnection {
-  lazy val user = getString("jira.user")
-  lazy val pass = getString("jira.password")
 
   val issues: Issues
   import issues._
@@ -121,19 +111,26 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
    *
    */
   def readIssueLink(selfKey: String): Reads[IssueLink] = new Reads[IssueLink] {
-    def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for (
-      name <- name(json \ "type");
-      inward <- (json \ "type" \ "inward").asOpt[String];
-      outward <- (json \ "type" \ "outward").asOpt[String];
+    def reads(json: JsValue): JsResult[IssueLink] = validate(s"issue link; got $json")(for {
+
+      tpe <- (json \ "type").toOption
+
+      name <- name(tpe)
+
+      inward <- (json \ "type" \ "inward").asOpt[String]
+
+      outward <- (json \ "type" \ "outward").asOpt[String]
+
       outwardIssue <- (for (
         out <- (optField(json)("outwardIssue"));
         out <- out.asOpt[JsObject]
-      ) yield (out \ "key").asOpt[String]).orElse(Some(None));
+      ) yield (out \ "key").asOpt[String]).orElse(Some(None))
+
       inwardIssue <- (for (
         in <- (optField(json)("inwardIssue"));
         in <- in.asOpt[JsObject]
       ) yield (in \ "key").asOpt[String]).orElse(Some(None))
-    ) yield {
+    } yield {
       val ilt = IssueLinkType(name, inward, outward)
       (inwardIssue, outwardIssue) match {
         case (Some(i), None) => IssueLink(ilt, i, selfKey) // read as: s"$i ${ilt.name} $selfKey"
@@ -148,6 +145,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case ("Duplicate", "is duplicated by", "duplicates") => Duplicates
       case ("Blocks", "is blocked by", "blocks")           => Blocks
       case ("Cloners", "is cloned by", "clones")           => Clones
+      case ("Mention","is mentioned by","mentions")        => Mentions
+//      case _ => new IssueLinkType(name, inward, outward) // meh
     }
 
   private def readFully(in: InputStream, bufferSize: Int = 1024): Array[Byte] = {
@@ -190,7 +189,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
 
     def downloadIssueAndCache =
       tryAuthUrl(jiraUrl(s"/issue/$projectId-${i}?expand=changelog")).get().map { resp =>
-        val contents = readFully(resp.ahcResponse.getResponseBodyAsStream)
+        val contents = resp.bodyAsBytes.toArray
         try Some(parseIssue(contents)) // don't bother writing to disk if it doesn't parse
         finally {
           val out = new FileOutputStream(fileFor(i))
@@ -240,8 +239,10 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "issuekey"          => v.as[String] // not normally parsed -- overridden in parseIssue
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
+      case "creator"           => v.as[User]
       case "created"           => v.as[Date]
       case "updated"           => v.as[Date]
+      case "lastViewed"        => v.asOpt[Date]
       case "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
       case "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
       case "status"            => (v \ "name").as[String] // Status: (Open, Closed)
@@ -266,6 +267,11 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
 
       case "customfield_10005" => v.asOpt[List[User]] // trac cc
       case "customfield_10101" => v.asOpt[List[String]] // flagged -- never set
+      case "customfield_10106" => v.asOpt[String] // ???
+      case "customfield_10200" => v.asOpt[String] // ???
+      case "customfield_10201" => v.asOpt[String] // ???
+      case "customfield_10202" => v.asOpt[String] // ???
+
       //      case "customfield_10104" => v.asOpt[Float] // Story points
       //      case "customfield_10105" => v.asOpt[Float] // business value
       case "subtasks" =>

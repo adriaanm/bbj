@@ -1,35 +1,26 @@
 package bbj
 
-import play.api.libs.ws.{ WS, Response }
-import play.api.libs.json.{ JsValue, Json, JsNull, Reads, JsSuccess, JsError, JsPath, JsResultException }
 import play.api.data.validation.ValidationError
-import java.util.Date
-import play.api.libs.json.JsResult
+import play.api.libs.json._
+import play.api.libs.ws.ahc.AhcWSClient
+import play.api.libs.ws.{WS, WSAuthScheme}
+
 import scala.concurrent.Future
-import scala.concurrent.Await
-import play.api.libs.json.JsObject
-import scala.concurrent.duration.Duration
-import java.io.FileInputStream
-import java.io.File
-import java.io.DataInputStream
-import java.io.InputStream
-import java.io.FileOutputStream
-import scala.collection.mutable.ArrayBuffer
 
 trait JsonConnection {
   implicit lazy val defaultContext: scala.concurrent.ExecutionContext = play.api.libs.concurrent.Execution.Implicits.defaultContext
 
-  def getString(x: String) = play.api.Play.current.configuration.getString(x)
-
   def user: Option[String]
   def pass: Option[String]
+
+  implicit val sslClient: AhcWSClient
 
   // try to authorize, or fall back to non-auth
   // need to authorize to get voters & watchers, apparently...
   def tryAuthUrl(url: String) = {
-    val req = WS.url(url)
+    val req = WS.clientUrl(url)
     if (user.isEmpty || pass.isEmpty) req
-    else req.withAuth(user.get, pass.get, com.ning.http.client.Realm.AuthScheme.BASIC)
+    else req.withAuth(user.get, pass.get, WSAuthScheme.BASIC)
   }
 
   //  2011-05-18T15:37:07.000+0200

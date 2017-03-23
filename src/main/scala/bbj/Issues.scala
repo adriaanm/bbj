@@ -26,6 +26,7 @@ trait Issues {
   case object Duplicates extends IssueLinkType("Duplicates", "is duplicated by", "duplicates")
   case object Blocks extends IssueLinkType("Blocks", "is blocked by", "blocks")
   case object Clones extends IssueLinkType("Clones", "is cloned by", "clones")
+  case object Mentions extends IssueLinkType("Mention","is mentioned by","mentions")
 
   case class IssueLink(kind: IssueLinkType, sourceKey: String, targetKey: String) {
     override def toString = s"$sourceKey ${kind.name} $targetKey"

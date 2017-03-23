@@ -1,39 +1,32 @@
 package bbj
-import java.util.Date
-import concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.{ Await, Future }
-import scala.concurrent.duration.Duration
-import scala.concurrent.Await.result
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
+import play.api.libs.ws.ahc.AhcWSClient
 
-/** new play.core.StaticApplication(new java.io.File("."))
- *  concurrent.Await.result(bbj.migrate.migrateScalaUntil(500), concurrent.duration.Duration.Inf)
- *
- *  import bbj._
- *  import migrate._
- *  import concurrent.ExecutionContext.Implicits.global
- *  import scala.concurrent.{Await, Future}
- *  import scala.concurrent.duration.Duration
- *  import scala.concurrent.Await.result
- *  import issueTranslation.jiraToYouTrack
- *
- *  def getIssues(from: Int, to: Int) = result(Future.sequence { (from to to).map { jira.getIssue } }.map(_.flatten), Duration.Inf)
- *
- *  val translated = getIssues(1, 500).map(jiraToYouTrack.mapOver).asInstanceOf[Seq[youTrack.issues.Issue]]
- *
- *  translated.flatMap(_.fields("fixedVersion").asInstanceOf[List[youTrack.issues.Version]])
- *  res12 map (v => youTrack.createVersion("SI", v))
- *
- *  result(youTrack.importIssues("SI", translated), Duration.Inf).ahcResponse.getResponseBody
- *
- *
- *  val allIssues = result(jira.allIssues, Duration.Inf)
- *  val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map{case (k, vs) => (k, vs.map(_._2).distinct)}
- *  allFieldValues.keys
- *
- *  allFieldValues("labels").asInstanceOf[Vector[List[String]]].flatten.distinct
+/**
+ import bbj._
+ import migrate._
+ import concurrent.ExecutionContext.Implicits.global
+
+ import scala.concurrent.{Await, Future}
+ import scala.concurrent.duration.Duration
+ import scala.concurrent.Await.result
+
+ def getIssues(from: Int, to: Int) = result(Future.sequence { (from to to).map { jira.getIssue("SI", _) } }.map(_.flatten), Duration.Inf)
+
  */
 object migrate {
-  val jira = new JiraConnection { val issues = issueTranslation }
+  implicit val system = ActorSystem("BBJ")
+  implicit val materializer = ActorMaterializer()
+
+  val jira = new JiraConnection {
+    val user = Option(System.getenv("jiraUser"))
+    val pass = Option(System.getenv("jiraPwd"))
+    System.setProperty("jsse.enableSNIExtension", "false") // http://stackoverflow.com/questions/7615645/ssl-handshake-alert-unrecognized-name-error-since-upgrade-to-java-1-7-0
+    val sslClient: AhcWSClient = AhcWSClient()
+
+    val issues = issueTranslation
+  }
 
   object issueTranslation extends TranslateJiraToYouTrack {
     val separateFieldJira = Set("status", "project", "labels", "issuelinks", "components", "attachment", "customfield_10005")
@@ -65,9 +58,6 @@ object migrate {
 
     }
   }
-
-  import concurrent.ExecutionContext.Implicits.global
-  import issueTranslation.{ Issue, Project, User, Version, jiraToYouTrack }
 
   // def createFieldTypes(projectId: String, allIssues: Seq[Issue]) = {
   //   val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }.toMap

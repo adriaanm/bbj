@@ -34,7 +34,6 @@ import scala.concurrent.Await.result
  */
 object migrate {
   val jira = new JiraConnection { val issues = issueTranslation }
-  val youTrack = new YouTrackConnection { val issues = issueTranslation }
 
   object issueTranslation extends TranslateJiraToYouTrack {
     val separateFieldJira = Set("status", "project", "labels", "issuelinks", "components", "attachment", "customfield_10005")
@@ -70,16 +69,16 @@ object migrate {
   import concurrent.ExecutionContext.Implicits.global
   import issueTranslation.{ Issue, Project, User, Version, jiraToYouTrack }
 
-  def createFieldTypes(projectId: String, allIssues: Seq[Issue]) = {
-    val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }.toMap
-    // a new youtrack project already has all these fields -- TODO: determined dynamically
-    val builtin = Set("assigneeName", "created", "summary", "description", "type", "priority", "reporterName", "state", "resolved", "updated", "watcherName", "voterName")
-    val unused = allFieldValues.filter { case (k, v) => v.size <= 1 }.keys.toSet
-    val fieldTypesToCreate = allFieldValues.keys.toSet -- unused -- builtin
+  // def createFieldTypes(projectId: String, allIssues: Seq[Issue]) = {
+  //   val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }.toMap
+  //   // a new youtrack project already has all these fields -- TODO: determined dynamically
+  //   val builtin = Set("assigneeName", "created", "summary", "description", "type", "priority", "reporterName", "state", "resolved", "updated", "watcherName", "voterName")
+  //   val unused = allFieldValues.filter { case (k, v) => v.size <= 1 }.keys.toSet
+  //   val fieldTypesToCreate = allFieldValues.keys.toSet -- unused -- builtin
     //Set("environment", "status", "fixVersions", "versions")
 
-    def createVersions(versions: Seq[Version]) =
-      Future.sequence(versions map (youTrack.createVersion(projectId, _)))
+    // def createVersions(versions: Seq[Version]) = ???
+      // Future.sequence(versions map (youTrack.createVersion(projectId, _)))
 
     /*def create_value(target, value, field_name, field_type, project_id):
     if field_type.startswith('user'):
@@ -107,37 +106,37 @@ object migrate {
             target.addValueToBundle(bundle, value['value'])
     except YouTrackException:
         pass*/
-    def createFieldType(fieldName: String) = fieldName match {
-      // new
-      case "environment" =>
-        youTrack.createCustomField(None, "field", fieldName, youTrack.field.params(
-          typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = false, emptyFieldText = "Undefined"): _*).map(Seq(_))
-        youTrack.createCustomField(Some(projectId), "field", fieldName, youTrack.field.params(
-          typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = true, emptyFieldText = "Undefined"): _*).map(Seq(_))
-      case "state" =>
-        youTrack.createCustomField(Some(projectId), "stateBundle", "Not a Bug", ("isResolved", "false"), ("description", "This is not a bug")).map(Seq(_))
-      case "affectsVersion" | "fixedVersion" =>
-        createVersions(allFieldValues(fieldName).asInstanceOf[Seq[Seq[Version]]].flatten)
-      case _ => println("field type: " + fieldName); Future.successful(Nil)
-    }
-
-    Future.sequence(fieldTypesToCreate.map(createFieldType)).map(_.flatten)
-  }
-
-  def migrateIssues(projectId: String, translated: Seq[Issue]) = for {
-    fieldCreation <- createFieldTypes(projectId, translated)
-    req <- youTrack.importIssues(projectId, translated)
-  } yield (fieldCreation, req.ahcResponse.getResponseBody)
-
-  def migrateProject(p: Project, from: Int, to: Int) = for {
-    (translated, allUsers) <- for (issues <- Future.sequence { (from to to).map { jira.getIssue(p.projectId, _) } })
-      yield (issues.flatten.map(jiraToYouTrack.mapOver).asInstanceOf[Seq[Issue]], jira.allUsers)
-    userImport <- youTrack.importUsers(allUsers map (jiraToYouTrack.apply _))
-    project <- youTrack.createProject(p)
-    (fieldCreation, issueImport) <- migrateIssues(p.projectId, translated)
-  } yield (userImport, project, fieldCreation, issueImport)
-
-  def migrateScalaUntil(to: Int) = migrateProject(Project("SI", "Scala", "The Scala Programming Language", "guest"), 1, to) // TODO: set lead to "odersky"
+  //   def createFieldType(fieldName: String) = fieldName match {
+  //     // new
+  //     case "environment" =>
+  //       youTrack.createCustomField(None, "field", fieldName, youTrack.field.params(
+  //         typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = false, emptyFieldText = "Undefined"): _*).map(Seq(_))
+  //       youTrack.createCustomField(Some(projectId), "field", fieldName, youTrack.field.params(
+  //         typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = true, emptyFieldText = "Undefined"): _*).map(Seq(_))
+  //     case "state" =>
+  //       youTrack.createCustomField(Some(projectId), "stateBundle", "Not a Bug", ("isResolved", "false"), ("description", "This is not a bug")).map(Seq(_))
+  //     case "affectsVersion" | "fixedVersion" =>
+  //       createVersions(allFieldValues(fieldName).asInstanceOf[Seq[Seq[Version]]].flatten)
+  //     case _ => println("field type: " + fieldName); Future.successful(Nil)
+  //   }
+  //
+  //   Future.sequence(fieldTypesToCreate.map(createFieldType)).map(_.flatten)
+  // }
+  //
+  // def migrateIssues(projectId: String, translated: Seq[Issue]) = for {
+  //   fieldCreation <- createFieldTypes(projectId, translated)
+  //   req <- youTrack.importIssues(projectId, translated)
+  // } yield (fieldCreation, req.ahcResponse.getResponseBody)
+  //
+  // def migrateProject(p: Project, from: Int, to: Int) = for {
+  //   (translated, allUsers) <- for (issues <- Future.sequence { (from to to).map { jira.getIssue(p.projectId, _) } })
+  //     yield (issues.flatten.map(jiraToYouTrack.mapOver).asInstanceOf[Seq[Issue]], jira.allUsers)
+  //   userImport <- youTrack.importUsers(allUsers map (jiraToYouTrack.apply _))
+  //   project <- youTrack.createProject(p)
+  //   (fieldCreation, issueImport) <- migrateIssues(p.projectId, translated)
+  // } yield (userImport, project, fieldCreation, issueImport)
+  //
+  // def migrateScalaUntil(to: Int) = migrateProject(Project("SI", "Scala", "The Scala Programming Language", "guest"), 1, to) // TODO: set lead to "odersky"
 
 }
 

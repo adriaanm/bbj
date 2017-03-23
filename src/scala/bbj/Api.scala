@@ -170,7 +170,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
   }
 
   private lazy val cacheDir = {
-    val cacheDir = getString("jira.cacheDir") getOrElse "/Users/adriaan/jira"
+    val cacheDir = "/Users/adriaan/jira"
     assert(new File(cacheDir).isDirectory(), s"Please create cache directory $cacheDir to avoid hammering the jira server.")
     cacheDir
   }

@@ -36,6 +36,7 @@ object User {
     ("dragos", "dragos"),
     ("drmaciver", "DRMacIver"),
     ("dubochet", "dubochet"),
+    ("dwijnand", "dwijnand"),
     ("eengbrec", "eengbrec"),
     ("etorreborre", "etorreborre"),
     ("ewilligerstempore", "paulp"),

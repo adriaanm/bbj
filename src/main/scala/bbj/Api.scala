@@ -160,7 +160,10 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
             cached(retries - 1)
         }
 
-    def loadCachedIssue = for { bytes <- cached() } yield Some(parseIssue(bytes))
+    def loadCachedIssue =
+      for { bytes <- cached() } yield
+        if (bytes.isEmpty) None
+        else Some(parseIssue(bytes))
 
     def downloadIssueAndCache =
       tryAuthUrl(jiraUrl(s"/issue/$projectId-${i}?expand=changelog")).get().map { resp =>

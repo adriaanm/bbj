@@ -2,243 +2,149 @@ package bbj
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import play.api.libs.ws.ahc.AhcWSClient
+import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.concurrent.Await.result
 
-/**
- import bbj._
- import migrate._
- import concurrent.ExecutionContext.Implicits.global
 
- import scala.concurrent.{Await, Future}
- import scala.concurrent.duration.Duration
- import scala.concurrent.Await.result
-
- def getIssues(from: Int, to: Int) = result(Future.sequence { (from to to).map { jira.getIssue("SI", _) } }.map(_.flatten), Duration.Inf)
-
- */
-object migrate {
+object export {
   implicit val system = ActorSystem("BBJ")
+  import system.dispatcher
+
   implicit val materializer = ActorMaterializer()
 
   val jira = new JiraConnection {
     val user = Option(System.getenv("jiraUser"))
     val pass = Option(System.getenv("jiraPwd"))
-    System.setProperty("jsse.enableSNIExtension", "false") // http://stackoverflow.com/questions/7615645/ssl-handshake-alert-unrecognized-name-error-since-upgrade-to-java-1-7-0
+    System.setProperty("jsse.enableSNIExtension", "false")
+    // http://stackoverflow.com/questions/7615645/ssl-handshake-alert-unrecognized-name-error-since-upgrade-to-java-1-7-0
     val sslClient: AhcWSClient = AhcWSClient()
-
-    val issues = issueTranslation
   }
 
-  object issueTranslation extends TranslateJiraToYouTrack {
-    val separateFieldJira = Set("status", "project", "labels", "issuelinks", "components", "attachment", "customfield_10005")
-    def xFieldName(n: String): Option[String] = n match {
-      case n if separateFieldJira(n) => None // not used or treated separately
-
-      case "issuekey"                => Some("numberInProject")
-      case "summary"                 => Some(n)
-      case "reporter"                => Some("reporterName")
-      case "created"                 => Some(n)
-      case "updated"                 => Some(n)
-      case "issuetype"               => Some("type")
-      case "priority"                => Some(n)
-
-      case "assignee"                => Some("assigneeName")
-      case "description"             => Some(n)
-      case "environment"             => Some(n) // custom
-      case "resolution"              => Some("state")
-      case "resolutiondate"          => Some("resolved")
-      case "versions"                => Some("affectsVersion")
-      case "fixVersions"             => Some("fixedVersion")
-      case "comment"                 => Some("comment")
-
-      case "votes"                   => Some("voterName")
-      case "watches"                 => Some("watcherName") // also includes customfield_10005
-
-      // customfield_10101, duedate, subtasks, workratio
-      case _                         => println(s"IGNORING FIELD $n"); None
-
+  // TODO: not yet fully reliable
+  def allIssues = (1 to 10250).grouped(1024) map { batch =>
+    try result(Future.sequence(batch map jira.getIssue("SI")), Duration.Inf)
+    catch {
+      case e => println(s"GAH $e"); Nil
     }
   }
 
-  // def createFieldTypes(projectId: String, allIssues: Seq[Issue]) = {
-  //   val allFieldValues = allIssues.flatMap(_.fields).groupBy(_._1).map { case (k, vs) => (k, vs.map(_._2).distinct) }.toMap
-  //   // a new youtrack project already has all these fields -- TODO: determined dynamically
-  //   val builtin = Set("assigneeName", "created", "summary", "description", "type", "priority", "reporterName", "state", "resolved", "updated", "watcherName", "voterName")
-  //   val unused = allFieldValues.filter { case (k, v) => v.size <= 1 }.keys.toSet
-  //   val fieldTypesToCreate = allFieldValues.keys.toSet -- unused -- builtin
-    //Set("environment", "status", "fixVersions", "versions")
-
-    // def createVersions(versions: Seq[Version]) = ???
-      // Future.sequence(versions map (youTrack.createVersion(projectId, _)))
-
-    /*def create_value(target, value, field_name, field_type, project_id):
-    if field_type.startswith('user'):
-        create_user(target, value)
-        value['name'] = value['name'].replace(' ', '_')
-    if field_name in jira.EXISTING_FIELDS:
-        return
-    if field_name.lower() not in [field.name.lower() for field in target.getProjectCustomFields(project_id)]:
-        if field_name.lower() not in [field.name.lower() for field in target.getCustomFields()]:
-            target.createCustomFieldDetailed(field_name, field_type, False, True, False, {})
-        if field_type in ['string', 'date', 'integer']:
-            target.createProjectCustomFieldDetailed(project_id, field_name, "No " + field_name)
-        else:
-            bundle_name = field_name + " bundle"
-            create_bundle_safe(target, bundle_name, field_type)
-            target.createProjectCustomFieldDetailed(project_id, field_name, "No " + field_name, {'bundle': bundle_name})
-    if field_type in ['string', 'date', 'integer']:
-        return
-    project_field = target.getProjectCustomField(project_id, field_name)
-    bundle = target.getBundle(field_type, project_field.bundle)
-    try:
-        if 'name' in value:
-            target.addValueToBundle(bundle, value['name'])
-        elif 'value' in value:
-            target.addValueToBundle(bundle, value['value'])
-    except YouTrackException:
-        pass*/
-  //   def createFieldType(fieldName: String) = fieldName match {
-  //     // new
-  //     case "environment" =>
-  //       youTrack.createCustomField(None, "field", fieldName, youTrack.field.params(
-  //         typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = false, emptyFieldText = "Undefined"): _*).map(Seq(_))
-  //       youTrack.createCustomField(Some(projectId), "field", fieldName, youTrack.field.params(
-  //         typeName = "string", isPrivate = false, defaultVisibility = true, autoAttached = true, emptyFieldText = "Undefined"): _*).map(Seq(_))
-  //     case "state" =>
-  //       youTrack.createCustomField(Some(projectId), "stateBundle", "Not a Bug", ("isResolved", "false"), ("description", "This is not a bug")).map(Seq(_))
-  //     case "affectsVersion" | "fixedVersion" =>
-  //       createVersions(allFieldValues(fieldName).asInstanceOf[Seq[Seq[Version]]].flatten)
-  //     case _ => println("field type: " + fieldName); Future.successful(Nil)
-  //   }
-  //
-  //   Future.sequence(fieldTypesToCreate.map(createFieldType)).map(_.flatten)
-  // }
-  //
-  // def migrateIssues(projectId: String, translated: Seq[Issue]) = for {
-  //   fieldCreation <- createFieldTypes(projectId, translated)
-  //   req <- youTrack.importIssues(projectId, translated)
-  // } yield (fieldCreation, req.ahcResponse.getResponseBody)
-  //
-  // def migrateProject(p: Project, from: Int, to: Int) = for {
-  //   (translated, allUsers) <- for (issues <- Future.sequence { (from to to).map { jira.getIssue(p.projectId, _) } })
-  //     yield (issues.flatten.map(jiraToYouTrack.mapOver).asInstanceOf[Seq[Issue]], jira.allUsers)
-  //   userImport <- youTrack.importUsers(allUsers map (jiraToYouTrack.apply _))
-  //   project <- youTrack.createProject(p)
-  //   (fieldCreation, issueImport) <- migrateIssues(p.projectId, translated)
-  // } yield (userImport, project, fieldCreation, issueImport)
-  //
-  // def migrateScalaUntil(to: Int) = migrateProject(Project("SI", "Scala", "The Scala Programming Language", "guest"), 1, to) // TODO: set lead to "odersky"
-
-}
-
-trait TranslateJiraToYouTrack extends Issues {
-  def xFieldName(n: String): Option[String]
-
-  // KEY: issuetype has VALUES: Vector(Bug, Improvement, Suggestion, New Feature)
-  def xType(t: String): String = t match {
-    case "Bug"         => "Bug"
-    case "Improvement" => "Feature"
-    case "Suggestion"  => "Feature"
-    case "New Feature" => "Feature"
+  val labelFreq = {
+    val is = allIssues.flatten.flatten.toList
+    val labelMap = is.map(i => (i, Labels.fromIssue(i)))
+    val labels = is.flatMap(Labels.fromIssue).toSet
+    labels.map(l => (l, labelMap.collect{case (i, ls) if ls contains l => i.key}.size)).toList.sortBy(- _._2)
   }
 
-  // KEY: priority has VALUES: Vector(Critical, Major, Minor, Blocker, Trivial)  
-  def xPriority(t: String): Int = t match {
-    case "Blocker"  => 4
-    case "Critical" => 3
-    case "Major"    => 2
-    case "Minor"    => 1
-    case "Trivial"  => 0
-  }
 
-  // KEY: resolution has VALUES: Vector(Some(Fixed), Some(Not a Bug), None, Some(Won't Fix), Some(Cannot Reproduce), Some(Duplicate), Some(Out of Scope), Some(Incomplete), Some(Fixed, Backport Pending))
-  // KEY: status has VALUES: Vector(Closed, Open)
-  // convert resolution to state (youtrack does not have both status and resolution)
-  def xState(r: Option[String]): String = r match {
-    case None                            => "Open"
-    case Some("Fixed")                   => "Fixed"
-    case Some("Won't Fix")               => "Won't Fix"
-    case Some("Cannot Reproduce")        => "Can't Reproduce"
-    case Some("Duplicate")               => "Duplicate"
-    case Some("Incomplete")              => "Incomplete"
-    case Some("Out of Scope")            => "Won't Fix"
-    case Some("Fixed, Backport Pending") => "To Backport"
-    case Some("Not a Bug")               => "Invalid"
-  }
+  def apply() = allIssues.toList
 
-  // TODO
-  def xComponent(c: String): String = c match {
-    case "Scaladoc Tool"          => "Scaladoc Tool"
-    case "Misc Compiler"          => "Misc Compiler"
-    case "Misc Library"           => "Misc Library"
-    case "Specification"          => "Specification"
-    case "Eclipse Plugin (EOL)"   => "Eclipse Plugin (EOL)"
-    case "Packaging"              => "Packaging"
-    case "Documentation and API"  => "Documentation and API"
-    case "Repl / Interpreter"     => "Repl / Interpreter"
-    case "Pattern Matcher"        => "Pattern Matcher"
-    case "Build, Developer Tools" => "Build, Developer Tools"
-    case "XML Support"            => "XML Support"
-    case "Jira"                   => "Jira"
-    case "Website"                => "Website"
-    case "Actors Library"         => "Actors Library"
-    case "MSIL Backend"           => "MSIL Backend"
-    case "Parser Combinators"     => "Parser Combinators"
-    case "Enumeration"            => "Enumeration"
-    case "Type Checker"           => "Type Checker"
-    case "Swing Library"          => "Swing Library"
-    case "Continuations"          => "Continuations"
-    case "Collections"            => "Collections"
-    case "Specialization"         => "Specialization"
-    case "Type Inference"         => "Type Inference"
-    case "Reflection"             => "Reflection"
-    case "Optimizer"              => "Optimizer"
-    case "Compiler Backend"       => "Compiler Backend"
-    case "Presentation Compiler"  => "Presentation Compiler"
-    case "Macros"                 => "Macros"
-    case "Concurrent Library"     => "Concurrent Library"
-    case "Partest"                => "Partest"
-  }
 
-  def xField(n: String, v: Any) = {
-    xFieldName(n) map (n => (n, (n, v) match {
-      case ("numberInProject", n: String) => n.split("-")(1)
-      case ("type", t: String)            => xType(t)
-      case ("priority", p: String)        => xPriority(p)
-      case ("state", r: Option[String])   => xState(r)
-      case (_, j)                         => jiraToYouTrack.mapOver(j)
-    }))
-  }
+  // "summary"           => v.as[String]
+  // "description"       => v.asOpt[String]
 
-  def validUserName(name: String) = !name.contains(" ")
-  def cleanUserName(name: String) = name.replace(" ", "_")
-  val BOGUS_EMAIL = "email.not@specified"
+  // "assignee"          => v.asOpt[User]
+  // "reporter"          => v.as[User]
+  // "creator"           => v.as[User]
 
-  // TODO: is the user transform done consistently?
-  object jiraToYouTrack extends IssuesTransform {
-    def apply(x: User): User = x match {
-      case User(id, dn, Some(em)) if validUserName(id) => x
-      case User(id, dn, em)                            => User(cleanUserName(id), dn, em orElse Some(BOGUS_EMAIL))(x.groups)
+  // "created"           => v.as[Date]
+  // "updated"           => v.as[Date]
+  // "lastViewed"        => v.asOpt[Date]
+  // "resolutiondate"    => v.asOpt[Date]
+  // "duedate"           => v.asOpt[Date]
+
+  // "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
+  // "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
+  // "resolution"        => optField(v)("name").map(_.as[String]) // "Fixed", "Not a Bug", "Won't Fix", "Cannot Reproduce", "Duplicate", "Out of Scope", "Incomplete", "Fixed, Backport Pending"
+  // "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
+  // "labels"            => v.as[List[String]]
+  // "environment"       => v.asOpt[String] // TODO: extract labels -- this field is extremely messy
+
+  // "versions"          => v.as[List[Version]] // affected version
+  // "fixVersions"       => v.as[List[Version]]
+
+
+  // "issuelinks"        => implicit val readIL = readIssueLink(selfKey); v.as[List[IssueLink]]
+  // "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
+  // "attachment"        => v.as[List[Attachment]]
+  // "votes"             => lazyList[User](v, "votes", "voters") // Future[List[User]]
+  // "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[User]]
+
+
+
+  object Labels {
+    def fromIssue(issue: Issue): List[String] = {
+      issue.issueType.flatMap(Type).toList ++
+        issue.priority.flatMap(Priority) ++
+        issue.resolution.flatten.flatMap(Resolution) ++
+        issue.components.toList.flatten.flatMap(Component) ++
+        issue.labels.getOrElse(Nil)
     }
-    def apply(x: Version): Version = x
-    def apply(x: IssueLinkType): IssueLinkType = x
 
-    override def mapOver(x: Any): Any =
-      x match {
-        //        case Comment(a, b, ua, c, u)         => Comment(apply(a), b, apply(ua), c, u)
-        //        case Attachment(f, a, c, d, s, m, p) => Attachment(f, apply(a), c, d, s, m, p)
-        //        case IssueLink(ilt, o, i)            => IssueLink(apply(ilt), o, i)
-        case Issue(key, fields) => Issue(key, fields flatMap { case (n, v) => xField(n, v) })
-        case x                  => super.mapOver(x)
-      }
+    def Type(t: Any): Option[String] = t match {
+      case "Improvement" => Some("improvement")
+      case "Suggestion" => Some("feature")
+      case "New Feature" => Some("feature")
+      case _ => None
+    }
+
+    // KEY: priority has VALUES: Vector(Critical, Major, Minor, Blocker, Trivial)
+    def Priority(t: Any): Option[String] = t match {
+      case "Blocker" => Some("blocker")
+      case "Critical" => Some("critical")
+//      case "Major" => 2
+      case "Minor" => Some("quickfix")
+      case "Trivial" => Some("quickfix")
+      case _ => None
+    }
+
+    def Resolution(r: Any): Option[String] = r match {
+      case Some("Fixed") => None
+      case Some("Won't Fix") => Some("wontfix")
+      case Some("Cannot Reproduce") => Some("needinfo")
+      case Some("Duplicate") => Some("duplicate")
+      case Some("Incomplete") => Some("needinfo")
+      case Some("Out of Scope") => Some("wontfix")
+      case Some("Fixed, Backport Pending") => Some("backport")
+//      case None => None
+//      case Some("Not a Bug") =>
+      case _ => None
+    }
+
+    def Component(c: String): Option[String] = c match {
+      case "Scaladoc Tool" => Some("scaladoc")
+      case "Specification" => Some("spec")
+      case "Documentation and API" => Some("docs")
+      case "Repl / Interpreter" => Some("repl")
+      case "Pattern Matcher" => Some("patmat")
+      case "Build, Developer Tools" => Some("build")
+      case "Enumeration" => Some("enum")
+      case "Type Checker" => Some("typer")
+      case "Collections" => Some("collections")
+      case "Specialization" => Some("specialization")
+      case "Type Inference" => Some("infer")
+      case "Reflection" => Some("reflection")
+      case "Optimizer" => Some("opt")
+      case "Compiler Backend" => Some("backend")
+      case "Presentation Compiler" => Some("interactive")
+      case "Macros" => Some("macros")
+      case _ => None
+      // case "Misc Compiler" => "Misc Compiler"
+      // case "Misc Library" => "Misc Library"
+      // case "Eclipse Plugin (EOL)" => "Eclipse Plugin (EOL)"
+      // case "Packaging" => "Packaging"
+      // case "XML Support" => "XML Support"
+      // case "Jira" => "Jira"
+      // case "Website" => "Website"
+      // case "Actors Library" => "Actors Library"
+      // case "MSIL Backend" => "MSIL Backend"
+      // case "Parser Combinators" => "Parser Combinators"
+      // case "Swing Library" => "Swing Library"
+      // case "Continuations" => "Continuations"
+      // case "Concurrent Library" => "Concurrent Library"
+      // case "Partest" => "Partest"
+    }
 
   }
-
-  /*
-   allFieldValues("labels").asInstanceOf[Vector[List[String]]].flatten.distinct
-res42: scala.collection.immutable.Vector[String] = Vector(postponed, partialfunction, java-sandbox, depmet, gadt, pattern-matching, type-inference, scaladoc-links, scaladoc, community, spec, string-interpolation, .NET, parametric-extractor, structural-types, xml, existential, error-messages, minimized, parser, tcpoly, soundness, performance, usability, outer-references, switch, java-reflection, should-not-compile, has-pull-request, tailrec, compiler-api, needs_discussion, case-class, grand-challenge, compiler-crash, name-mangling, lub, java-interop, annotations, named-default-args, backport, try-catch, emacs, typetag, varargs, collections, inner-class, scaladoc-types, implicit, binary-compatibility, scalap, runtime-crash, lazy-val, scaladoc-usecases, dependent-types, optimizer, implicit...
-scala> allFieldValues("labels").asInstanceOf[Vector[List[String]]].flatten.distinct.size
-res43: Int = 181
-   * 
-   * */
 
 }

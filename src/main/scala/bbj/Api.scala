@@ -1,6 +1,7 @@
 package bbj
 
 import java.io._
+import java.nio.file.Files
 import java.util.Date
 
 import play.api.libs.json._
@@ -8,20 +9,7 @@ import play.api.libs.json._
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 
-/* to experiment from the play console:
-
-  new play.core.StaticApplication(new java.io.File("."))
-  import bbj._
-  object jira extends JiraConnection { val issues = new Issues {} }
-  import jira.issues._
-  val issues = concurrent.Await.result(jira.allIssues, concurrent.duration.Duration.Inf)
-  issues.flatMap(_.fields("issuelinks").asInstanceOf[List[IssueLink]])
-
-*/
 trait JiraConnection extends JsonConnection {
-
-  val issues: Issues
-  import issues._
 
   implicit object readUser extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
@@ -133,8 +121,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     } yield {
       val ilt = IssueLinkType(name, inward, outward)
       (inwardIssue, outwardIssue) match {
-        case (Some(i), None) => IssueLink(ilt, i, selfKey) // read as: s"$i ${ilt.name} $selfKey"
-        case (None, Some(o)) => IssueLink(ilt, selfKey, o) // read as: s"$selfKey ${ilt.name} $o"
+        case (None, Some(o)) => IssueLink(ilt, o) // read as: s"$selfKey ${ilt.name} $o"
+        case (Some(i), None) => IssueLink(ilt, i, reversed = true) // read as: s"$i ${ilt.name} $selfKey"
       }
     })
   }
@@ -149,53 +137,38 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
 //      case _ => new IssueLinkType(name, inward, outward) // meh
     }
 
-  private def readFully(in: InputStream, bufferSize: Int = 1024): Array[Byte] = {
-    val bytes = new Array[Byte](bufferSize)
-    val contents = ArrayBuffer[Byte]()
-
-    @annotation.tailrec
-    def read(): Unit =
-      in.read(bytes) match {
-        case -1 =>
-        case count =>
-          val data = new Array[Byte](count)
-          Array.copy(bytes, 0, data, 0, count)
-          contents ++= data
-          read()
-      }
-
-    read()
-    contents.toArray
-  }
-
   private lazy val cacheDir = {
     val cacheDir = "/Users/adriaan/jira"
     assert(new File(cacheDir).isDirectory(), s"Please create cache directory $cacheDir to avoid hammering the jira server.")
     cacheDir
   }
 
-  private def fileFor(key: Int) = new File(s"$cacheDir/${key}.json")
+  private def pathFor(key: Int) = new File(s"$cacheDir/${key}.json").toPath
   private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
 
-  
-  def getIssue(projectId: String, i: Int): Future[Option[Issue]] = {
-    def loadCachedIssue =
-      Future(Some {
-        val f = fileFor(i)
-        val data = new Array[Byte](f.length.asInstanceOf[Int])
-        (new DataInputStream(new FileInputStream(f))).readFully(data)
-        parseIssue(data)
-      })
+  def getIssue(projectId: String)(i: Int): Future[Option[Issue]] = {
+    def cached(retries: Int = 3): Future[Array[Byte]] =
+      if (retries < 0) Future.failed(new IOException("ran out of retries")) else
+        Future {
+          val bytes = Files.readAllBytes(pathFor(i))
+          println(s"$i loaded from cache (${bytes.length}  bytes)")
+          bytes
+        } recoverWith {
+          case ioe: IOException if ioe.getMessage contains "Too many open files" =>
+            println(s"retrying due to ${ioe.getMessage}")
+            Thread.sleep(5000)
+            cached(retries - 1)
+        }
+
+    def loadCachedIssue = for { bytes <- cached() } yield Some(parseIssue(bytes))
 
     def downloadIssueAndCache =
       tryAuthUrl(jiraUrl(s"/issue/$projectId-${i}?expand=changelog")).get().map { resp =>
         val contents = resp.bodyAsBytes.toArray
         try Some(parseIssue(contents)) // don't bother writing to disk if it doesn't parse
         finally {
-          val out = new FileOutputStream(fileFor(i))
-          try out.write(contents, 0, contents.size)
-          finally { out.flush(); out.close() }
-          println("YEP: " + i)
+          Files.write(pathFor(i), contents)
+          println("Cached " + i)
         }
       }
 
@@ -203,14 +176,15 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case _ => // if we couldn't load from disk, ask jira thrice
         def download(retries: Int): Future[Option[Issue]] =
           downloadIssueAndCache recoverWith {
-            case e if retries == 0 => throw e
             // don't retry when server says the issue doesn't exist
             case e: NoSuchElementException =>
               println(s"issue does not exist: $i ($e)")
+              Files.write(pathFor(i), Array.emptyByteArray)
               Future.successful(None)
+            case e if retries == 0 => throw e
             case e =>
               println(s"MEH: $i with $e (cause: ${e.getCause()})")
-              e.printStackTrace()
+//              e.printStackTrace()
               download(retries - 1)
           }
         download(3)
@@ -219,6 +193,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
 
 //  lazy val allIssues: Future[IndexedSeq[Issue]] =
 //    Future.sequence { (1 to lastIssue).map { getIssue(projectId, _) } }.map(_.flatten)
+
 
   def parseIssue(data: Array[Byte]): Issue = parseIssue(Json.parse(new String(data)))
   def parseIssue(i: JsValue): Issue =

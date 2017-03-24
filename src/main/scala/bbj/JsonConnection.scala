@@ -42,9 +42,13 @@ trait JsonConnection {
     if ((json \ countField).as[Int] == 0) Future.successful(Nil)
     else {
       val self = (json \ "self").as[String]
-      tryAuthUrl(self).get().map { req =>
-        try {  (req.json \ elemsField).as[List[T]] }
-        catch { case x: Exception => println(s"failed to parse list $elemsField in ${req.json} "); Nil }
+      try {
+        tryAuthUrl(self).get().map { req =>
+          try {  (req.json \ elemsField).as[List[T]] }
+          catch { case x: Exception => println(s"failed to parse list $elemsField in ${req.json} "); Nil }
+        }
+      } catch {
+        case e => Future.failed(e)
       }
     }
 }

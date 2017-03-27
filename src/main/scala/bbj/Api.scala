@@ -2,6 +2,7 @@ package bbj
 
 import java.io._
 import java.nio.file.Files
+import java.time.Instant
 import java.util.Date
 
 import play.api.libs.json._
@@ -71,8 +72,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       author <- (json \ "author").asOpt[User];
       body <- (json \ "body").asOpt[String];
       updateAuthor <- (json \ "updateAuthor").asOpt[User];
-      created <- (json \ "created").asOpt[Date];
-      updated <- (json \ "updated").asOpt[Date]
+      created <- (json \ "created").asOpt[Instant];
+      updated <- (json \ "updated").asOpt[Instant]
     ) yield Comment(author, body, updateAuthor, created, updated))
   }
 
@@ -80,7 +81,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     def reads(json: JsValue): JsResult[Attachment] = validate(s"attachment; got $json")(for (
       filename <- (json \ "filename").asOpt[String];
       author <- (json \ "author").asOpt[User];
-      created <- (json \ "created").asOpt[Date];
+      created <- (json \ "created").asOpt[Instant];
       size <- (json \ "size").asOpt[Int];
       mimeType <- (json \ "mimeType").asOpt[String];
       properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
@@ -138,20 +139,19 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     }
 
   private lazy val cacheDir = {
-    val cacheDir = "/Users/adriaan/jira"
+    val cacheDir = s"${System.getProperty("user.home")}/jira"
     assert(new File(cacheDir).isDirectory(), s"Please create cache directory $cacheDir to avoid hammering the jira server.")
     cacheDir
   }
 
-  private def pathFor(key: Int) = new File(s"$cacheDir/${key}.json").toPath
-  private def jiraUrl(uri: String) = "https://issues.scala-lang.org/rest/api/latest" + uri
+  def getIssue(key: String): Future[Option[Issue]] = {
+    lazy val cachePath = new File(s"$cacheDir/$key.json").toPath
 
-  def getIssue(projectId: String)(i: Int): Future[Option[Issue]] = {
     def cached(retries: Int = 3): Future[Array[Byte]] =
       if (retries < 0) Future.failed(new IOException("ran out of retries")) else
         Future {
-          val bytes = Files.readAllBytes(pathFor(i))
-          println(s"$i loaded from cache (${bytes.length}  bytes)")
+          val bytes = Files.readAllBytes(cachePath)
+          println(s"$key loaded from cache (${bytes.length}  bytes)")
           bytes
         } recoverWith {
           case ioe: IOException if ioe.getMessage contains "Too many open files" =>
@@ -165,15 +165,16 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
         if (bytes.isEmpty) None
         else Some(parseIssue(bytes))
 
-    def downloadIssueAndCache =
-      tryAuthUrl(jiraUrl(s"/issue/$projectId-${i}?expand=changelog")).get().map { resp =>
+    def downloadIssueAndCache = {
+      tryAuthUrl(s"https://issues.scala-lang.org/rest/api/latest/issue/$key?expand=changelog").get().map { resp =>
         val contents = resp.bodyAsBytes.toArray
         try Some(parseIssue(contents)) // don't bother writing to disk if it doesn't parse
         finally {
-          Files.write(pathFor(i), contents)
-          println("Cached " + i)
+          Files.write(cachePath, contents)
+          println("Cached " + key)
         }
       }
+    }
 
     loadCachedIssue recoverWith {
       case _ => // if we couldn't load from disk, ask jira thrice
@@ -181,12 +182,12 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
           downloadIssueAndCache recoverWith {
             // don't retry when server says the issue doesn't exist
             case e: NoSuchElementException =>
-              println(s"issue does not exist: $i ($e)")
-              Files.write(pathFor(i), Array.emptyByteArray)
+              println(s"issue does not exist: $key ($e)")
+              Files.write(cachePath, Array.emptyByteArray)
               Future.successful(None)
             case e if retries == 0 => throw e
             case e =>
-              println(s"MEH: $i with $e (cause: ${e.getCause()})")
+              println(s"MEH: $key with $e (cause: ${e.getCause()})")
 //              e.printStackTrace()
               download(retries - 1)
           }
@@ -218,9 +219,9 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
       case "creator"           => v.as[User]
-      case "created"           => v.as[Date]
-      case "updated"           => v.as[Date]
-      case "lastViewed"        => v.asOpt[Date]
+      case "created"           => v.as[Instant]
+      case "updated"           => v.as[Instant]
+      case "lastViewed"        => v.asOpt[Instant]
       case "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
       case "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
       case "status"            => (v \ "name").as[String] // Status: (Open, Closed)
@@ -229,8 +230,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "description"       => v.asOpt[String]
       case "environment"       => v.asOpt[String] // TODO: extract labels -- this field is extremely messy
       case "resolution"        => optField(v)("name").map(_.as[String]) // "Fixed", "Not a Bug", "Won't Fix", "Cannot Reproduce", "Duplicate", "Out of Scope", "Incomplete", "Fixed, Backport Pending"
-      case "resolutiondate"    => v.asOpt[Date]
-      case "duedate"           => v.asOpt[Date]
+      case "resolutiondate"    => v.asOpt[Instant]
+      case "duedate"           => v.asOpt[Instant]
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
       case "labels"            => v.as[List[String]]

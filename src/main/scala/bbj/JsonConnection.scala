@@ -26,6 +26,8 @@ trait JsonConnection {
   //  2011-05-18T15:37:07.000+0200
   implicit val dateRead = Reads.dateReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
 
+  implicit val instantRead = Reads.instantReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+
   def validate[T](tp: String)(x: Option[T]): JsResult[T] =
     x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected." + tp))))
 

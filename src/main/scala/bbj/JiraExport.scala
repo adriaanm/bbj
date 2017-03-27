@@ -1,7 +1,10 @@
 package bbj
+import java.time.Instant
+
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import play.api.libs.ws.ahc.AhcWSClient
+
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
 import scala.concurrent.Await.result
@@ -23,65 +26,222 @@ object export {
 
   // TODO: not yet fully reliable
   def allIssues = (1 to 10250).grouped(1024) map { batch =>
-    try result(Future.sequence(batch map jira.getIssue("SI")), Duration.Inf)
-    catch {
-      case e => println(s"GAH $e"); Nil
-    }
+    result(Future.sequence(batch map (i => jira.getIssue(s"SI-$i"))), Duration.Inf)
   }
 
+  // filter on project because some issues were moved -- we are only moving the SI ones
+  // 57 issues were moved, 43 were deleted, so we end up with 100 less than we fetch
+  lazy val issues = allIssues.flatten.flatten.filter(_.fields("project") == "SI").toList
+
   val labelFreq = {
-    val is = allIssues.flatten.flatten.toList
-    val labelMap = is.map(i => (i, Labels.fromIssue(i)))
-    val labels = is.flatMap(Labels.fromIssue).toSet
+    val labelMap = issues.map(i => (i, Labels.fromIssue(i)))
+    val labels = issues.flatMap(Labels.fromIssue).toSet
     labels.map(l => (l, labelMap.collect{case (i, ls) if ls contains l => i.key}.size)).toList.sortBy(- _._2)
   }
 
 
+  val assignees = issues.flatMap(_.assignee)
+
   def apply() = allIssues.toList
 
+  object GitHub {
+    import play.api.libs.json.Json
 
-  // "summary"           => v.as[String]
-  // "description"       => v.asOpt[String]
+    implicit lazy val descriptionWrites = Json.writes[Description]
+    case class Description(title: String,
+                            body: String,
+                            created_at: Instant,
+                            closed_at: Option[Instant],
+                            updated_at: Instant,
+                            assignee: Option[String],
+                            milestone: Option[Int],
+                            closed: Boolean,
+                            labels: List[String])
 
-  // "assignee"          => v.asOpt[User]
-  // "reporter"          => v.as[User]
-  // "creator"           => v.as[User]
+    implicit lazy val commentWrites = Json.writes[Comment]
+    case class Comment(body: String, created_at: Option[Instant])
 
-  // "created"           => v.as[Date]
-  // "updated"           => v.as[Date]
-  // "lastViewed"        => v.asOpt[Date]
-  // "resolutiondate"    => v.asOpt[Date]
-  // "duedate"           => v.asOpt[Date]
+    implicit lazy val issueWrites = Json.writes[Issue]
+    case class Issue(issue: Description, comments: List[Comment])
 
-  // "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
-  // "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
-  // "resolution"        => optField(v)("name").map(_.as[String]) // "Fixed", "Not a Bug", "Won't Fix", "Cannot Reproduce", "Duplicate", "Out of Scope", "Incomplete", "Fixed, Backport Pending"
-  // "components"        => v.as[List[JsObject]].map(c => (c \ "name").as[String])
-  // "labels"            => v.as[List[String]]
-  // "environment"       => v.asOpt[String] // TODO: extract labels -- this field is extremely messy
+  }
 
-  // "versions"          => v.as[List[Version]] // affected version
-  // "fixVersions"       => v.as[List[Version]]
+  // TODO:
+  //  - issue references
+  //  - code blocks
+  //  - ...
+  def toMarkdown(s: String) = s
+
+  def exportIssue(issue: Issue) = {
+    val description =
+      GitHub.Description(
+        title = issue.summary,
+        body = issue.description.map(toMarkdown).getOrElse(""),
+        created_at = issue.created,
+        closed_at = issue.resolutionDate,
+        updated_at = issue.updated,
+        assignee = issue.assignee.flatMap(_.toGithub),
+        milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
+        closed = issue.closed,
+        labels = Labels.fromIssue(issue))
+
+    // first comment:
+    def metaComment = {
+      val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}"
+
+      val reporter = s"Reporter: ${issue.reporter}"
+
+      val affected =
+        if (issue.affectedVersions.nonEmpty) List(s"Affected Versions: ${issue.affectedVersions.mkString(", ")}")
+        else Nil
+
+      val alsoFixedIn =
+        if (issue.fixVersions.nonEmpty && issue.fixVersions.tail.nonEmpty) List(s"Other Milestones: ${issue.fixVersions.tail.mkString(", ")}")
+        else Nil
+
+      val crossRefs = issue.issuelinks.filterNot(_.reversed).groupBy(_.kind.name).toList.collect { case (kind, links) if links.nonEmpty =>
+        val ghrefs = links flatMap (link => Issue.toGithubRef(link.targetKey))
+        if (ghrefs.isEmpty) "" else s"${kind} ${ghrefs.mkString(", ")}"
+      }.filterNot(_.isEmpty)
 
 
-  // "issuelinks"        => implicit val readIL = readIssueLink(selfKey); v.as[List[IssueLink]]
-  // "comment"           => (v \ "comments").as[List[Comment]] // List[Comment]
-  // "attachment"        => v.as[List[Attachment]]
-  // "votes"             => lazyList[User](v, "votes", "voters") // Future[List[User]]
-  // "watches"           => lazyList[User](v, "watchCount", "watchers") // Future[List[User]]
+      val extras = from :: reporter :: (affected ++ alsoFixedIn ++ crossRefs)
 
+      GitHub.Comment(extras.mkString("\n", "\n", ""), None)
+    }
+
+
+    def ghcomment(c: Comment) = {
+      val edited =
+        if (c.updated == c.created) ""
+        else if (c.updateAuthor != c.author) s" (edited by ${c.updateAuthor} on ${c.updated})"
+        else s" (edited on ${c.updated})"
+
+      GitHub.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created))
+    }
+
+    val comments =
+      metaComment :: issue.comments.map(ghcomment)
+
+    // ignored:
+    // attachments
+    // votes
+    // watches
+    // creator (there are only 10 issues where reporter != creator)
+    // lastViewed
+    // duedate
+
+    GitHub.Issue(description, comments)
+  }
+
+  object Milestones {
+    def fromVersion(v: Version): Option[Int] = all.indexOf(v.toString) match { case -1 => None case n => Some(n) }
+
+    val all = List(
+      "Backlog",
+      "2.6.1",
+      "2.7.0",
+      "2.7.1",
+      "2.7.2",
+      "2.7.3",
+      "2.7.4",
+      "2.7.5",
+      "2.7.6",
+      "2.7.7",
+      "2.8.0",
+      "2.8.1",
+      "2.9.0",
+      "2.9.0-1",
+      "2.9.1",
+      "2.9.2",
+      "2.9.3-RC1",
+      "2.9.3-RC2",
+      "2.10.0-M1",
+      "2.10.0-M2",
+      "2.10.0-M3",
+      "2.10.0-M4",
+      "2.10.0-M5",
+      "2.10.0-M6",
+      "2.10.0-M7",
+      "2.10.0-RC1",
+      "2.10.0-RC2",
+      "2.10.0-RC3",
+      "2.10.0-RC5",
+      "2.10.0",
+      "2.10.1-RC1",
+      "2.10.1",
+      "2.10.2-RC1",
+      "2.10.2-RC2",
+      "2.10.2",
+      "2.10.3-RC1",
+      "2.10.3-RC2",
+      "2.10.3-RC3",
+      "2.10.3",
+      "2.10.4-RC1",
+      "2.10.4-RC2",
+      "2.10.4-RC3",
+      "2.10.4",
+      "2.10.5",
+      "2.10.6",
+      "2.11.0-M1",
+      "2.11.0-M2",
+      "2.11.0-M3",
+      "2.11.0-M4",
+      "2.11.0-M5",
+      "2.11.0-M6",
+      "2.11.0-M7",
+      "2.11.0-M8",
+      "2.11.0-RC1",
+      "2.11.0-RC3",
+      "2.11.0-RC4",
+      "2.11.0",
+      "2.11.1",
+      "2.11.2",
+      "2.11.3",
+      "2.11.4",
+      "2.11.5",
+      "2.11.6",
+      "2.11.7",
+      "2.11.8",
+      "2.11.9",
+      "2.12.0-M1",
+      "2.12.0-M2",
+      "2.12.0-M3",
+      "2.12.0-M4",
+      "2.12.0-M5",
+      "2.12.0-RC1",
+      "2.12.0-RC2",
+      "2.12.0",
+      "2.12.1",
+      "2.12.2",
+      "2.12.3",
+      "2.13.0-M1",
+      "2.13.0-M2",
+      "2.13.0-M3",
+      "2.13.0-M4",
+      "2.13.0-RC1")
+  }
 
 
   object Labels {
     def fromIssue(issue: Issue): List[String] = {
-      issue.issueType.flatMap(Type).toList ++
-        issue.priority.flatMap(Priority) ++
-        issue.resolution.flatten.flatMap(Resolution) ++
-        issue.components.toList.flatten.flatMap(Component) ++
-        issue.labels.getOrElse(Nil)
+      val raw = Type(issue.issueType).toList ++
+          Priority(issue.priority) ++
+          Resolution(issue.resolution) ++
+          issue.components.flatMap(Component) ++
+          issue.fixVersions.flatMap(FixVersion) ++
+          issue.labels ++
+          issue.environment.map(_.split(' ').toList).getOrElse(Nil) // recover some info from misuse of the environment field (often used for labels...)
+
+      raw map (l => rewrite.getOrElse(l, l)) filter all
     }
 
-    def Type(t: Any): Option[String] = t match {
+    def FixVersion(v: Version): Option[String] = v.name match {
+      case "macro-paradise" => Some("macro-paradise")
+      case _ => None
+    }
+
+    def Type(t: String): Option[String] = t match {
       case "Improvement" => Some("improvement")
       case "Suggestion" => Some("feature")
       case "New Feature" => Some("feature")
@@ -89,7 +249,7 @@ object export {
     }
 
     // KEY: priority has VALUES: Vector(Critical, Major, Minor, Blocker, Trivial)
-    def Priority(t: Any): Option[String] = t match {
+    def Priority(t: String): Option[String] = t match {
       case "Blocker" => Some("blocker")
       case "Critical" => Some("critical")
 //      case "Major" => 2
@@ -98,7 +258,7 @@ object export {
       case _ => None
     }
 
-    def Resolution(r: Any): Option[String] = r match {
+    def Resolution(r: Option[String]): Option[String] = r match {
       case Some("Fixed") => None
       case Some("Won't Fix") => Some("wontfix")
       case Some("Cannot Reproduce") => Some("needinfo")
@@ -145,6 +305,95 @@ object export {
       // case "Partest" => "Partest"
     }
 
+    val rewrite = Map(
+      "low-hanging-fruit" -> "quickfix",
+      "type-inference" -> "infer",
+      "macro" -> "macros",
+      "opt" -> "optimizer",
+      "inliner" -> "optimizer",
+      "compiler-performance" -> "performance",
+      "specialized" -> "specialization",
+      "pattern-matching" -> "patmat",
+      "exhaustiveness" -> "patmat",
+      "unreachability" -> "patmat",
+      "documentation" -> "docs",
+      "wrong-bytecode" -> "bytecode",
+      "verifyerror" -> "bytecode",
+      "soundness" -> "should-not-compile",
+      "unsound" -> "should-not-compile",
+      "does-not-compile" -> "should-compile",
+      "error-messages" -> "usability")
+
+    val all = Set(
+      "improvement",
+      "quickfix",
+      "community",
+      "feature",
+      "blocker",
+      "critical",
+      "regression",
+      "minimized",
+      "has-pull-request",
+      "backport",
+      "reflection",
+      "typer",
+      "infer",
+      "macros",
+      "macro-paradise",
+      "backend",
+      "optimizer",
+      "specialization",
+      "patmat",
+      "mixin",
+      "parser",
+      "erasure",
+      "repl",
+      "interactive",
+      "scaladoc",
+      "lint",
+      "library",
+      "collections",
+      "docs",
+      "spec",
+      "build",
+      "crash",
+      "compiler-crash",
+      "runtime-crash",
+      "bytecode",
+      "should-not-compile",
+      "should-compile",
+      "separate-compilation",
+      "usability",
+      "structural-types",
+      "applyDynamic",
+      "java-interop",
+      "implicit",
+      "valueclass",
+      "performance",
+      "named-default-args",
+      "existential",
+      "annotations",
+      "enum",
+      "quasiquotes",
+      "access",
+      "depmet",
+      "delayedinit",
+      "tcpoly",
+      "deprecation",
+      "case-class",
+      "dependent-types",
+      "implicits",
+      "serialization",
+      "implicit-classes",
+      "string-interpolation",
+      "lub",
+      "positions",
+      "package-objects",
+      "varargs",
+      "overloading",
+      "name-mangling",
+      "f-bounds",
+      "byname")
   }
 
 }

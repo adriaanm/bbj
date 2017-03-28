@@ -14,14 +14,11 @@ object export {
   implicit val system = ActorSystem("BBJ")
   import system.dispatcher
 
-  implicit val materializer = ActorMaterializer()
+  implicit val materializer: ActorMaterializer = ActorMaterializer()
 
-  val jira = new JiraConnection {
-    val user = Option(System.getenv("jiraUser"))
-    val pass = Option(System.getenv("jiraPwd"))
-    System.setProperty("jsse.enableSNIExtension", "false")
-    // http://stackoverflow.com/questions/7615645/ssl-handshake-alert-unrecognized-name-error-since-upgrade-to-java-1-7-0
-    val sslClient: AhcWSClient = AhcWSClient()
+  object jira extends JiraConnection {
+    val materializer = export.materializer
+    val context = system.dispatcher
   }
 
   // TODO: not yet fully reliable
@@ -33,36 +30,37 @@ object export {
   // 57 issues were moved, 43 were deleted, so we end up with 100 less than we fetch
   lazy val issues = allIssues.flatten.flatten.filter(_.fields("project") == "SI").toList
 
-  val labelFreq = {
+  lazy val labelFreq = {
     val labelMap = issues.map(i => (i, Labels.fromIssue(i)))
     val labels = issues.flatMap(Labels.fromIssue).toSet
     labels.map(l => (l, labelMap.collect{case (i, ls) if ls contains l => i.key}.size)).toList.sortBy(- _._2)
   }
 
-
-  val assignees = issues.flatMap(_.assignee)
+  lazy val assignees = issues.flatMap(_.assignee)
 
   def apply() = allIssues.toList
 
-  object GitHub {
-    import play.api.libs.json.Json
 
-    implicit lazy val descriptionWrites = Json.writes[Description]
-    case class Description(title: String,
-                            body: String,
-                            created_at: Instant,
-                            closed_at: Option[Instant],
-                            updated_at: Instant,
-                            assignee: Option[String],
-                            milestone: Option[Int],
-                            closed: Boolean,
-                            labels: List[String])
+  object github extends GithubConnection {
+    val materializer = export.materializer
+    val context = system.dispatcher
 
-    implicit lazy val commentWrites = Json.writes[Comment]
-    case class Comment(body: String, created_at: Option[Instant])
+    def createLabels = Future.sequence(Labels.all.map(name => createLabel(Label(name))))
 
-    implicit lazy val issueWrites = Json.writes[Issue]
-    case class Issue(issue: Description, comments: List[Comment])
+    def createMilestones = {
+      val allFixVersions = issues.flatMap(_.fixVersions).distinct
+      val milestones = Milestones.all.map { name =>
+        val version = allFixVersions.find(_.toString == name)
+        val dueOn = version.flatMap(_.releaseDate).map(d => Instant.ofEpochMilli(d.getTime))
+        Milestone(
+          title = name,
+          state = version.map(v => if (!v.released) "open" else "closed"),
+          due_on = dueOn
+        )
+      }
+
+      milestones.map(m => result(createMilestone(m), Duration.Inf))
+    }
 
   }
 
@@ -74,7 +72,7 @@ object export {
 
   def exportIssue(issue: Issue) = {
     val description =
-      GitHub.Description(
+      github.Description(
         title = issue.summary,
         body = issue.description.map(toMarkdown).getOrElse(""),
         created_at = issue.created,
@@ -107,7 +105,7 @@ object export {
 
       val extras = from :: reporter :: (affected ++ alsoFixedIn ++ crossRefs)
 
-      GitHub.Comment(extras.mkString("\n", "\n", ""), None)
+      github.Comment(extras.mkString("\n", "\n", ""), None)
     }
 
 
@@ -117,7 +115,7 @@ object export {
         else if (c.updateAuthor != c.author) s" (edited by ${c.updateAuthor} on ${c.updated})"
         else s" (edited on ${c.updated})"
 
-      GitHub.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created))
+      github.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created))
     }
 
     val comments =
@@ -131,7 +129,7 @@ object export {
     // lastViewed
     // duedate
 
-    GitHub.Issue(description, comments)
+    github.Issue(description, comments)
   }
 
   object Milestones {

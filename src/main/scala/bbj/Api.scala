@@ -6,11 +6,22 @@ import java.time.Instant
 import java.util.Date
 
 import play.api.libs.json._
+import play.api.libs.ws.{WS, WSAuthScheme}
 
-import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.Future
 
 trait JiraConnection extends JsonConnection {
+
+  val user = Option(System.getenv("jiraUser"))
+  val pass = Option(System.getenv("jiraPwd"))
+
+  // try to authorize, or fall back to non-auth
+  // need to authorize to get voters & watchers, apparently...
+  def tryAuthUrl(url: String) = {
+    val req = WS.clientUrl(url)
+    if (user.isEmpty || pass.isEmpty) req
+    else req.withAuth(user.get, pass.get, WSAuthScheme.BASIC)
+  }
 
   implicit object readUser extends Reads[User] {
     def reads(json: JsValue): JsResult[User] = validate("user")(for (
@@ -156,7 +167,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
         } recoverWith {
           case ioe: IOException if ioe.getMessage contains "Too many open files" =>
             println(s"retrying due to ${ioe.getMessage}")
-            Thread.sleep(5000)
+            Thread.sleep(1000)
             cached(retries - 1)
         }
 
@@ -259,4 +270,58 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     } catch {
       case e: Exception => throw new Exception(s"Error parsing field $field : $v", e)
     })
+}
+
+
+trait GithubConnection extends JsonConnection {
+  import play.api.libs.json._
+  import play.api.http.Writeable._
+
+  val token = System.getenv("githubToken")
+
+  def tryAuthUrl(url: String) = {
+    WS.clientUrl(url).withHeaders(
+      "Authorization" -> s"token $token",
+      "Accept" -> "application/vnd.github.golden-comet-preview+json")
+
+  }
+
+  val api = s"https://api.github.com/repos/scala/bug"
+
+  def createJson(kind: String, jsValue: JsValue) =
+    tryAuthUrl(s"$api/$kind").post(jsValue) map { resp => if (resp.status == 201) "ok" else s"error: $resp (for $jsValue)" }
+
+  def createLabel(label: Label) = createJson("labels", Json.toJson(label))
+  def createMilestone(milestone: Milestone) = createJson("milestones", Json.toJson(milestone))
+  def createIssue(issue: Issue) = tryAuthUrl(s"$api/import/issues").post(Json.toJson(issue)) map (_.json.validate[IssueResponse])
+
+  implicit lazy val descriptionWrites = Json.writes[Description]
+  case class Description(title: String,
+                         body: String,
+                         created_at: Instant,
+                         closed_at: Option[Instant],
+                         updated_at: Instant,
+                         assignee: Option[String],
+                         milestone: Option[Int],
+                         closed: Boolean,
+                         labels: List[String])
+
+  implicit lazy val commentWrites = Json.writes[Comment]
+  case class Comment(body: String, created_at: Option[Instant])
+
+  implicit lazy val issueWrites = Json.writes[Issue]
+  case class Issue(issue: Description, comments: List[Comment])
+
+
+  implicit lazy val labelWrites = Json.writes[Label]
+  case class Label(name: String, color: Option[String] = None, url: Option[String] = None) {
+    override def toString = name
+  }
+
+  implicit lazy val milestoneWrites = Json.writes[Milestone]
+  case class Milestone(number: Option[Int] = None, title: String, state: Option[String] = None, description: Option[String] = None,
+                       created_at: Option[Instant] = None, updated_at: Option[Instant] = None, closed_at: Option[Date] = None, due_on: Option[Instant] = None)
+
+  implicit lazy val issueResponseReads = Json.reads[IssueResponse]
+  case class IssueResponse(id: Int, status: String, url: String)
 }

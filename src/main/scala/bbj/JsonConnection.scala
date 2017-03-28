@@ -1,32 +1,30 @@
 package bbj
 
+import akka.stream.ActorMaterializer
 import play.api.data.validation.ValidationError
 import play.api.libs.json._
 import play.api.libs.ws.ahc.AhcWSClient
-import play.api.libs.ws.{WS, WSAuthScheme}
+import play.api.libs.ws.{WS, WSAuthScheme, WSRequest}
 
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 
 trait JsonConnection {
-  implicit lazy val defaultContext: scala.concurrent.ExecutionContext = play.api.libs.concurrent.Execution.Implicits.defaultContext
+  // http://stackoverflow.com/questions/7615645/ssl-handshake-alert-unrecognized-name-error-since-upgrade-to-java-1-7-0
+  System.setProperty("jsse.enableSNIExtension", "false")
 
-  def user: Option[String]
-  def pass: Option[String]
+  implicit val context: ExecutionContext
+  implicit val materializer: ActorMaterializer
 
-  implicit val sslClient: AhcWSClient
+  implicit val sslClient: AhcWSClient = AhcWSClient()
 
-  // try to authorize, or fall back to non-auth
-  // need to authorize to get voters & watchers, apparently...
-  def tryAuthUrl(url: String) = {
-    val req = WS.clientUrl(url)
-    if (user.isEmpty || pass.isEmpty) req
-    else req.withAuth(user.get, pass.get, WSAuthScheme.BASIC)
-  }
+  def tryAuthUrl(url: String): WSRequest
 
   //  2011-05-18T15:37:07.000+0200
   implicit val dateRead = Reads.dateReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+  implicit val dateWrite = Writes.dateWrites("yyyy-MM-dd'T'HH:mm:ssZ")
 
   implicit val instantRead = Reads.instantReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+  implicit val instantWrite = Writes.DefaultInstantWrites
 
   def validate[T](tp: String)(x: Option[T]): JsResult[T] =
     x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected." + tp))))

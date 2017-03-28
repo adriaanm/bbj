@@ -1,9 +1,7 @@
 package bbj
 
-import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.Date
-
-import scala.concurrent.Future
 
 case class Project(projectId: String, name: String, description: String, lead: String, startingNumber: Int = 1)
 
@@ -224,9 +222,9 @@ case class Version(name: String, description: Option[String], releaseDate: Optio
   override def toString = (if (name.startsWith("Scala ")) name drop "Scala ".length else name).trim
 }
 
-case class Comment(author: User, body: String, updateAuthor: User, created: Instant, updated: Instant)
+case class Comment(author: User, body: String, updateAuthor: User, created: OffsetDateTime, updated: OffsetDateTime)
 
-case class Attachment(filename: String, author: User, created: Instant, content: String, size: Int, mimeType: String, properties: Map[String, Any])
+case class Attachment(filename: String, author: User, created: OffsetDateTime, content: String, size: Int, mimeType: String, properties: Map[String, Any])
 
 sealed class IssueLinkType(val name: String)
 
@@ -257,9 +255,9 @@ case class Issue(key: String, fields: Map[String, Any]) {
 
   def assignee         = fields get "assignee"       collect { case x: Option[User] => x } get
   def reporter         = fields get "reporter"       collect { case x: User => x } get
-  def created          = fields get "created"        collect { case x: Instant => x } get
-  def updated          = fields get "updated"        collect { case x: Instant => x } get
-  def resolutionDate   = fields get "resolutiondate" collect { case x: Option[Instant] => x } get
+  def created          = fields get "created"        collect { case x: OffsetDateTime => x } get
+  def updated          = fields get "updated"        collect { case x: OffsetDateTime => x } get
+  def resolutionDate   = fields get "resolutiondate" collect { case x: Option[OffsetDateTime] => x } get
 
   def closed           = (fields get "status"         collect { case x: String => x } get) == "Closed"
 

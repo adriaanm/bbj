@@ -3,8 +3,8 @@ package bbj
 import akka.stream.ActorMaterializer
 import play.api.data.validation.ValidationError
 import play.api.libs.json._
+import play.api.libs.ws.WSRequest
 import play.api.libs.ws.ahc.AhcWSClient
-import play.api.libs.ws.{WS, WSAuthScheme, WSRequest}
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -23,8 +23,9 @@ trait JsonConnection {
   implicit val dateRead = Reads.dateReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
   implicit val dateWrite = Writes.dateWrites("yyyy-MM-dd'T'HH:mm:ssZ")
 
-  implicit val instantRead = Reads.instantReads("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
-  implicit val instantWrite = Writes.DefaultInstantWrites
+  // JIRA's extra SSS breaks DateTimeFormatter (contrary to its docs??)
+  implicit val odtReads = Reads.offsetDateTimeReads("yyyy-MM-dd'T'HH:mm:ss[.SSS]Z")
+
 
   def validate[T](tp: String)(x: Option[T]): JsResult[T] =
     x.map(JsSuccess apply _) getOrElse JsError(Seq(JsPath() -> Seq(ValidationError("validate.error.expected." + tp))))

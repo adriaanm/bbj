@@ -2,7 +2,7 @@ package bbj
 
 import java.io._
 import java.nio.file.Files
-import java.time.Instant
+import java.time.{OffsetDateTime, OffsetTime}
 import java.util.Date
 
 import play.api.libs.json._
@@ -83,8 +83,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       author <- (json \ "author").asOpt[User];
       body <- (json \ "body").asOpt[String];
       updateAuthor <- (json \ "updateAuthor").asOpt[User];
-      created <- (json \ "created").asOpt[Instant];
-      updated <- (json \ "updated").asOpt[Instant]
+      created <- (json \ "created").asOpt[OffsetDateTime];
+      updated <- (json \ "updated").asOpt[OffsetDateTime]
     ) yield Comment(author, body, updateAuthor, created, updated))
   }
 
@@ -92,7 +92,7 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
     def reads(json: JsValue): JsResult[Attachment] = validate(s"attachment; got $json")(for (
       filename <- (json \ "filename").asOpt[String];
       author <- (json \ "author").asOpt[User];
-      created <- (json \ "created").asOpt[Instant];
+      created <- (json \ "created").asOpt[OffsetDateTime];
       size <- (json \ "size").asOpt[Int];
       mimeType <- (json \ "mimeType").asOpt[String];
       properties <- (optField(json)("properties")).map(_.asOpt[JsObject]).orElse(Some(None));
@@ -230,9 +230,9 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "summary"           => v.as[String]
       case "reporter"          => v.as[User]
       case "creator"           => v.as[User]
-      case "created"           => v.as[Instant]
-      case "updated"           => v.as[Instant]
-      case "lastViewed"        => v.asOpt[Instant]
+      case "created"           => v.as[OffsetDateTime]
+      case "updated"           => v.as[OffsetDateTime]
+      case "lastViewed"        => v.asOpt[OffsetDateTime]
       case "issuetype"         => (v \ "name").as[String] // IssueType: (Bug, Improvement, Suggestion, New Feature)
       case "priority"          => (v \ "name").as[String] // Priority: (Critical, Major, Minor, Blocker, Trivial)
       case "status"            => (v \ "name").as[String] // Status: (Open, Closed)
@@ -241,8 +241,8 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
       case "description"       => v.asOpt[String]
       case "environment"       => v.asOpt[String] // TODO: extract labels -- this field is extremely messy
       case "resolution"        => optField(v)("name").map(_.as[String]) // "Fixed", "Not a Bug", "Won't Fix", "Cannot Reproduce", "Duplicate", "Out of Scope", "Incomplete", "Fixed, Backport Pending"
-      case "resolutiondate"    => v.asOpt[Instant]
-      case "duedate"           => v.asOpt[Instant]
+      case "resolutiondate"    => v.asOpt[OffsetDateTime]
+      case "duedate"           => v.asOpt[OffsetDateTime]
       case "versions"          => v.as[List[Version]] // affected version
       case "fixVersions"       => v.as[List[Version]]
       case "labels"            => v.as[List[String]]
@@ -295,32 +295,40 @@ trait GithubConnection extends JsonConnection {
   def createMilestone(milestone: Milestone) = createJson("milestones", Json.toJson(milestone))
   def createIssue(issue: Issue) = tryAuthUrl(s"$api/import/issues").post(Json.toJson(issue)) map (_.json.validate[IssueResponse])
 
+
+  def milestones: Future[List[Milestone]] = tryAuthUrl(s"$api/milestones").get() map (_.json.validate[List[Milestone]].get)
+
   implicit lazy val descriptionWrites = Json.writes[Description]
+  implicit lazy val descriptionReads = Json.reads[Description]
   case class Description(title: String,
                          body: String,
-                         created_at: Instant,
-                         closed_at: Option[Instant],
-                         updated_at: Instant,
+                         created_at: OffsetDateTime,
+                         closed_at: Option[OffsetDateTime],
+                         updated_at: OffsetDateTime,
                          assignee: Option[String],
                          milestone: Option[Int],
                          closed: Boolean,
                          labels: List[String])
 
   implicit lazy val commentWrites = Json.writes[Comment]
-  case class Comment(body: String, created_at: Option[Instant])
+  implicit lazy val commentReads = Json.reads[Comment]
+  case class Comment(body: String, created_at: Option[OffsetDateTime])
 
   implicit lazy val issueWrites = Json.writes[Issue]
+  implicit lazy val issueReads = Json.reads[Issue]
   case class Issue(issue: Description, comments: List[Comment])
 
 
   implicit lazy val labelWrites = Json.writes[Label]
+  implicit lazy val labelReads = Json.reads[Label]
   case class Label(name: String, color: Option[String] = None, url: Option[String] = None) {
     override def toString = name
   }
 
   implicit lazy val milestoneWrites = Json.writes[Milestone]
+  implicit lazy val milestoneReads = Json.reads[Milestone]
   case class Milestone(number: Option[Int] = None, title: String, state: Option[String] = None, description: Option[String] = None,
-                       created_at: Option[Instant] = None, updated_at: Option[Instant] = None, closed_at: Option[Date] = None, due_on: Option[Instant] = None)
+                       created_at: Option[OffsetDateTime] = None, updated_at: Option[OffsetDateTime] = None, closed_at: Option[OffsetDateTime] = None, due_on: Option[OffsetDateTime] = None)
 
   implicit lazy val issueResponseReads = Json.reads[IssueResponse]
   case class IssueResponse(id: Int, status: String, url: String)

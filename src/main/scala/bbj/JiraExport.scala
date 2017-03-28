@@ -1,13 +1,13 @@
 package bbj
-import java.time.Instant
+
+import java.time.{OffsetDateTime, ZoneId, ZoneOffset}
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import play.api.libs.ws.ahc.AhcWSClient
 
+import scala.concurrent.Await.result
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
-import scala.concurrent.Await.result
 
 
 object export {
@@ -51,17 +51,17 @@ object export {
       val allFixVersions = issues.flatMap(_.fixVersions).distinct
       val milestones = Milestones.all.map { name =>
         val version = allFixVersions.find(_.toString == name)
-        val dueOn = version.flatMap(_.releaseDate).map(d => Instant.ofEpochMilli(d.getTime))
-        Milestone(
-          title = name,
-          state = version.map(v => if (!v.released) "open" else "closed"),
-          due_on = dueOn
-        )
+        val date = version.flatMap(_.releaseDate).map(d => OffsetDateTime.ofInstant(d.toInstant, ZoneOffset.UTC))
+        val state = version.map(v => if (!v.released) "open" else "closed")
+
+        if (state == Some("closed")) Milestone(title = name, state = state, closed_at = date)
+        else Milestone(title = name, state = state, due_on = date)
       }
 
       milestones.map(m => result(createMilestone(m), Duration.Inf))
     }
 
+    lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
   }
 
   // TODO:
@@ -78,7 +78,7 @@ object export {
         created_at = issue.created,
         closed_at = issue.resolutionDate,
         updated_at = issue.updated,
-        assignee = issue.assignee.flatMap(_.toGithub),
+        assignee = None, // TODO: when no long in private repo, issue.assignee.flatMap(_.toGithub),
         milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
         closed = issue.closed,
         labels = Labels.fromIssue(issue))
@@ -87,7 +87,7 @@ object export {
     def metaComment = {
       val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}"
 
-      val reporter = s"Reporter: ${issue.reporter}"
+      val reporter = s"Reporter: ${issue.reporter.toGithub}"
 
       val affected =
         if (issue.affectedVersions.nonEmpty) List(s"Affected Versions: ${issue.affectedVersions.mkString(", ")}")
@@ -123,7 +123,7 @@ object export {
 
     // ignored:
     // attachments
-    // votes
+    // votesto
     // watches
     // creator (there are only 10 issues where reporter != creator)
     // lastViewed
@@ -133,7 +133,9 @@ object export {
   }
 
   object Milestones {
-    def fromVersion(v: Version): Option[Int] = all.indexOf(v.toString) match { case -1 => None case n => Some(n) }
+
+    def fromVersion(v: Version): Option[Int] =
+      github.allMilestones find (_.title == v.name) flatMap (_.number)
 
     val all = List(
       "Backlog",

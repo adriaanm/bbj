@@ -4,6 +4,7 @@ import java.time.{Instant, OffsetDateTime, ZoneId, ZoneOffset}
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
+import fastparse.core
 
 import scala.concurrent.Await.result
 import scala.concurrent.Future
@@ -73,63 +74,58 @@ object export {
   }
 
   object toMarkdown {
+    import fastparse.all._
+
+    lazy val s = P (CharPred(c => c.isWhitespace) | End | Start)
+    lazy val ws = s.rep.!
+
+    def markedLR(boundaryL: P[Unit], boundaryR: P[Unit]) =
+      P( ws ~ boundaryL ~ (!(boundaryR ~ s) ~ markedText).! ~ boundaryR ~ ws)
+
+    def marked(boundary: P[Unit]) = markedLR(boundary, boundary)
+
     // compile patterns once
-    val code = """(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r
-    val header = """(?m)^h([0-6])\.(.*)$""".r
+    lazy val lang = CharPred(_.isLetter).rep.!
+
+    lazy val insert           = marked(P("+"))             map {case (wsl, x, wsr) => s"$wsl<ins>$x</ins>$wsr"
+    lazy val superscript      = marked(P("^"))             map {case (wsl, x, wsr) => s"$wsl<sup>$x</sup>$wsr"
+    lazy val subscript        = marked(P("~"))             map {case (wsl, x, wsr) => s"$wsl<sub>$x</sub>$wsr"
+    lazy val del              = marked(P("-"))             map {case (wsl, x, wsr) => s"$wsl~~$x~~$wsr"
+    lazy val strong           = marked(P("*"))             map {case (wsl, x, wsr) => s"$wsl**$x**$wsr"
+    lazy val emphasis         = marked(P("_"))             map {case (wsl, x, wsr) => s"$wsl*$x*$wsr"
+    lazy val fancyQuote       = markedLR(P("`"), P("'"))   map {case (wsl, x, wsr) => s"$wsl'$x'$wsr" // normalize use of fancy `quoting' to 'quoting'
+
+    lazy val verbatim         = P("{{") ~ ((!P("}}") ~ unmarkedWord).rep map (x => x.mkString("`", "", "`"))) ~ P("}}")
+
+    lazy val wikiLine: Parser[String] =
+      lineStart ~ (codeBlock | header | bulletLine | wikiLineRest) ~ lineEnd
+
+    lazy val wikiLineRest: Parser[String] = verbatim | markedText |
+
+    lazy val markedText: Parser[String] =
+      insert | superscript | subscript | del | strong | fancyQuote | unmarkedWord
+
+    lazy val unmarkedWord = ws ~ (!s ~ AnyChar).rep.! ~ ws map { case (wsl, word, wsr) => wsl+word+wsr }
+    lazy val code = AnyChar.rep.! // TODO
+
+    val codeBlock = P(
+      "{code"~ (":"~ lang).? ~"}" ~ code ~ "{code}" map {
+        case (lang, code) => s"```${lang.getOrElse("scala")}$code```"
+      })
+
 
     val quote     = """\{quote\}""".r
     val norformat = """\{noformat\}""".r
 
-    val fancyQuote       = """\b`([^`\s]+)'\b""".r
-    val verbatim         = """\b\{\{([^}]+)\}\}\b""".r
-    val insert           = """\b\+([^+]+)\+\b""".r
-    val superscript      = """\b\^([^^]+)\^\b""".r
-    val subscript        = """\b~([^~]+)~\b""".r
-    val del              = """\b-([^-]+)-\b""".r
-    val strongOrEmphasis = """\b([*_])([^*_]+)\1\b""".r
+    val header = """(?m)^h([0-6])\.(.*)$""".r
 
-//    val cite  = """\?\?((?:.[^?]|[^?].)+)\?\?""".r // loops
-    val foot  = """\[(.+?)\]([^\(]*)""".r
-
-    val link  = """\[(.+?)\|(.+)\]""".r
+    val foot  = """\[(.+?)\]([^\(]*)""".r  "<$1>$2"
+    val link  = """\[(.+?)\|(.+)\]""".r    "[$1]($2)"
     val issueRefUrl = """https://issues.scala-lang.org/browse/SI-(\d+)\s""".r
     val issueRef = """\bSI-(\d+)\b""".r
 
-    // inspired by http://j2m.fokkezb.nl/J2M.js
-    def apply(s: String) = {
-      val intermed =
-        List((code, {
-          (m: Match) =>
-            val lang = Option(m.group(2)).getOrElse("scala")
-            val code = m.group(3)
-            s"```$lang$code```"
-        }),
-          (header, (m: Match) => "#" * {
-            m.group(1).toInt
-          } + m.group(2)),
-          (strongOrEmphasis, { m: Match =>
-            val to = if (Option(m.group(1)).contains("*")) "**" else "*"
-            to + m.group(2) + to
-          })
-        ).foldLeft(s) { case (s, (rx, replacer)) => rx.replaceAllIn(s, m => Regex.quoteReplacement(replacer(m))) }
 
-      // TODO [this bug|https://issues.scala-lang.org/browse/SI-3448]
-      List(
-        (fancyQuote,  "`$1`"), // normalize use of fancy `quoting', which usually means just `quoting`
-        (verbatim,    "`$1`"),
-//        (cite,        "<cite>$1</cite>"), // disable because the regex loops, also seems unlikely to be used
-        (insert,      "<ins>$1</ins>"),
-        (superscript, "<sup>$1</sup>"),
-        (subscript,   "<sub>$1</sub>"),
-        (del,         "~~$1~~"), // must come after previous
-        (link,        "[$1]($2)"),
-        (foot,        "<$1>$2"),
-        (quote,       "```"), // not correct, but users confused this with actual quoting quite often
-        (norformat,   "```"),
-        (issueRefUrl, "#$1"),
-        (issueRef,    "#$1")
-      ).foldLeft(intermed) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
-    }
+    def apply(s: String): String = {}
   }
 
   def exportIssue(issue: Issue) = {

@@ -7,4 +7,4 @@ scalaVersion in ThisBuild := "2.11.9"
 
 libraryDependencies += "com.typesafe.play" %% "play" % "2.5.0"
 libraryDependencies += "com.typesafe.play" %% "play-ws" % "2.5.0"
-
+libraryDependencies += "com.lihaoyi" %% "fastparse" % "0.4.2"

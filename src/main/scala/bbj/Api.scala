@@ -2,7 +2,7 @@ package bbj
 
 import java.io._
 import java.nio.file.Files
-import java.time.{OffsetDateTime, OffsetTime}
+import java.time.{Instant, OffsetDateTime, OffsetTime}
 import java.util.Date
 
 import play.api.libs.json._
@@ -158,16 +158,16 @@ Set(Scala 2.10.0-M4, Scala 2.8.1, Scala 2.10.0-M7, Scala 2.9.2, Scala 2.10.0, Sc
   def getIssue(key: String): Future[Option[Issue]] = {
     lazy val cachePath = new File(s"$cacheDir/$key.json").toPath
 
-    def cached(retries: Int = 3): Future[Array[Byte]] =
+    def cached(retries: Int = 5): Future[Array[Byte]] =
       if (retries < 0) Future.failed(new IOException("ran out of retries")) else
         Future {
           val bytes = Files.readAllBytes(cachePath)
           println(s"$key loaded from cache (${bytes.length}  bytes)")
           bytes
         } recoverWith {
-          case ioe: IOException if ioe.getMessage contains "Too many open files" =>
+          case ioe: IOException => //if ioe.getMessage contains "Too many open files" =>
             println(s"retrying due to ${ioe.getMessage}")
-            Thread.sleep(1000)
+            Thread.sleep(2000)
             cached(retries - 1)
         }
 
@@ -286,25 +286,32 @@ trait GithubConnection extends JsonConnection {
 
   }
 
-  val api = s"https://api.github.com/repos/scala/bug"
+  val repoName = "bug"
+  private val orgName = "scala"
+
+  val apiRepo = s"https://api.github.com/repos/$orgName/$repoName"
+  val apiOrgs = s"https://api.github.com/orgs/$orgName"
 
   def createJson(kind: String, jsValue: JsValue) =
-    tryAuthUrl(s"$api/$kind").post(jsValue) map { resp => if (resp.status == 201) "ok" else s"error: $resp (for $jsValue)" }
+    tryAuthUrl(s"$apiRepo/$kind").post(jsValue) map { resp => if (resp.status == 201) "ok" else s"error: $resp (for $jsValue)" }
 
   def createLabel(label: Label) = createJson("labels", Json.toJson(label))
   def createMilestone(milestone: Milestone) = createJson("milestones", Json.toJson(milestone))
-  def createIssue(issue: Issue) = tryAuthUrl(s"$api/import/issues").post(Json.toJson(issue)) map (_.json.validate[IssueResponse])
+  def createIssue(issue: Issue) = tryAuthUrl(s"$apiRepo/import/issues").post(Json.toJson(issue)) map (_.json.validate[IssueResponse])
 
 
-  def milestones: Future[List[Milestone]] = tryAuthUrl(s"$api/milestones").get() map (_.json.validate[List[Milestone]].get)
+  def milestones: Future[List[Milestone]] = tryAuthUrl(s"$apiRepo/milestones").get() map (_.json.validate[List[Milestone]].get)
+
+  def createRepo(repo: Repository) =
+    tryAuthUrl(s"$apiOrgs/repos").post(Json.toJson(repo)) //map { resp => if (resp.status == 201) "ok" else s"error: $resp (for ${Json.toJson(repo)})" }
 
   implicit lazy val descriptionWrites = Json.writes[Description]
   implicit lazy val descriptionReads = Json.reads[Description]
   case class Description(title: String,
                          body: String,
-                         created_at: OffsetDateTime,
-                         closed_at: Option[OffsetDateTime],
-                         updated_at: OffsetDateTime,
+                         created_at: Instant,
+                         closed_at: Option[Instant],
+                         updated_at: Instant,
                          assignee: Option[String],
                          milestone: Option[Int],
                          closed: Boolean,
@@ -312,7 +319,7 @@ trait GithubConnection extends JsonConnection {
 
   implicit lazy val commentWrites = Json.writes[Comment]
   implicit lazy val commentReads = Json.reads[Comment]
-  case class Comment(body: String, created_at: Option[OffsetDateTime])
+  case class Comment(body: String, created_at: Option[Instant])
 
   implicit lazy val issueWrites = Json.writes[Issue]
   implicit lazy val issueReads = Json.reads[Issue]
@@ -328,8 +335,13 @@ trait GithubConnection extends JsonConnection {
   implicit lazy val milestoneWrites = Json.writes[Milestone]
   implicit lazy val milestoneReads = Json.reads[Milestone]
   case class Milestone(number: Option[Int] = None, title: String, state: Option[String] = None, description: Option[String] = None,
-                       created_at: Option[OffsetDateTime] = None, updated_at: Option[OffsetDateTime] = None, closed_at: Option[OffsetDateTime] = None, due_on: Option[OffsetDateTime] = None)
+                       created_at: Option[Instant] = None, updated_at: Option[Instant] = None, closed_at: Option[Instant] = None, due_on: Option[Instant] = None)
 
   implicit lazy val issueResponseReads = Json.reads[IssueResponse]
   case class IssueResponse(id: Int, status: String, url: String)
+
+
+  implicit lazy val repositoryWrites = Json.writes[Repository]
+  implicit lazy val repositoryReads = Json.reads[Repository]
+  case class Repository(name: String, `private`: Boolean, description: Option[String] = None)
 }

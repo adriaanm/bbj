@@ -1,6 +1,6 @@
 package bbj
 
-import java.time.{OffsetDateTime, ZoneId, ZoneOffset}
+import java.time.{Instant, OffsetDateTime, ZoneId, ZoneOffset}
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
@@ -8,6 +8,7 @@ import akka.stream.ActorMaterializer
 import scala.concurrent.Await.result
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
+import scala.util.matching.Regex.Match
 
 
 object export {
@@ -45,49 +46,77 @@ object export {
     val materializer = export.materializer
     val context = system.dispatcher
 
+    def createBugRepo = createRepo(new Repository(repoName, true, Some("The bug tracker for the Scala programming language. Please do not use for questions or feature requests.")))
+
     def createLabels = Future.sequence(Labels.all.map(name => createLabel(Label(name))))
 
     def createMilestones = {
       val allFixVersions = issues.flatMap(_.fixVersions).distinct
       val milestones = Milestones.all.map { name =>
         val version = allFixVersions.find(_.toString == name)
-        val date = version.flatMap(_.releaseDate).map(d => OffsetDateTime.ofInstant(d.toInstant, ZoneOffset.UTC))
+        val date = version.flatMap(_.releaseDate).map(d => d.toInstant)
         val state = version.map(v => if (!v.released) "open" else "closed")
 
-        if (state == Some("closed")) Milestone(title = name, state = state, closed_at = date)
-        else Milestone(title = name, state = state, due_on = date)
+        Milestone(title = name, description = version.flatMap(_.description), state = state, due_on = date)
       }
 
       milestones.map(m => result(createMilestone(m), Duration.Inf))
     }
 
+    def createIssues(from: Int, to: Int) =
+      issues.toIterator.slice(from, to).map(exportIssue).map(i => result(createIssue(i), Duration.Inf)).toList
+
     lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
   }
 
-  // TODO:
-  //  - issue references
-  //  - code blocks
-  //  - ...
-  def toMarkdown(s: String) = s
+  // inspired by http://j2m.fokkezb.nl/J2M.js
+  def toMarkdown(s: String) = {
+    val intermed =
+      List(("""(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r, (m: Match) => s"```${Option(m.group(2)).getOrElse("scala")}${m.group(3)}```"),
+        ("""(?m)^h([0-6])\.(.*)$""".r, (m: Match) => "#" * {m.group(1).toInt} + m.group(2))
+        //,
+//        ("""([*_])(.*)\1""".r, { m: Match =>
+//          val to = if (m.group(1) == "*") "**" else "*"
+//          to + m.group(2) + to
+//        })
+      ).foldLeft(s) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
+
+    // TODO [this bug|https://issues.scala-lang.org/browse/SI-3448]
+
+    List(
+      ("""`([^`\s]+)'""".r, "`$1`"), // normalize use of fancy `quoting', which usually means just `quoting`
+      ("""\{\{([^}]+)\}\}""".r, """`$1`"""),
+      ("""\?\?((?:.[^?]|[^?].)+)\?\?""".r, """<cite>$1</cite>"""),
+      ("""\+([^+]*)\+""".r, """<ins>$1</ins>"""),
+      ("""\^([^^]*)\^""".r, """<sup>$1</sup>"""),
+      ("""~([^~]*)~""".r, """<sub>$1</sub>"""),
+      ("""-([^-]*)-""".r, """~~$1~~"""), // must come after previous
+      ("""\[(.+?)\|(.+)\]""".r, """[$1]($2)"""),
+      ("""\[(.+?)\]([^\(]*)""".r, """<$1>$2"""),
+      ("""\{quote\}""".r, """```"""), // not correct, but users confused this with actual quoting quite often
+      ("""\{noformat\}""".r, """```"""),
+      ("""https://issues.scala-lang.org/browse/SI-(\d+)\s""".r,"""#$1"""),
+      ("""SI-(\d+)\b""".r,"""#$1""")
+    ).foldLeft(intermed) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
+  }
 
   def exportIssue(issue: Issue) = {
     val description =
       github.Description(
         title = issue.summary,
         body = issue.description.map(toMarkdown).getOrElse(""),
-        created_at = issue.created,
-        closed_at = issue.resolutionDate,
-        updated_at = issue.updated,
+        created_at = issue.created.toInstant,
+        closed_at = issue.resolutionDate.map(_.toInstant),
+        updated_at = issue.updated.toInstant,
         assignee = None, // TODO: when no long in private repo, issue.assignee.flatMap(_.toGithub),
         milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
         closed = issue.closed,
         labels = Labels.fromIssue(issue))
 
-    // first comment:
     def metaComment = {
-      val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}"
+      val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}" // TODO: if we end up redirecting from jira to github, these links won't work :smirk: -- add token to escape the future redirect? or already create an issues-archive subdomain?
 
-      val reporter = s"Reporter: ${issue.reporter.toGithub}"
+      val reporter = s"Reporter: ${issue.reporter}"
 
       val affected =
         if (issue.affectedVersions.nonEmpty) List(s"Affected Versions: ${issue.affectedVersions.mkString(", ")}")
@@ -115,7 +144,7 @@ object export {
         else if (c.updateAuthor != c.author) s" (edited by ${c.updateAuthor} on ${c.updated})"
         else s" (edited on ${c.updated})"
 
-      github.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created))
+      github.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created.toInstant))
     }
 
     val comments =
@@ -243,8 +272,8 @@ object export {
 
     def Type(t: String): Option[String] = t match {
       case "Improvement" => Some("improvement")
-      case "Suggestion" => Some("feature")
-      case "New Feature" => Some("feature")
+      case "Suggestion" => Some("improvement")
+      case "New Feature" => Some("improvement")
       case _ => None
     }
 
@@ -322,13 +351,15 @@ object export {
       "soundness" -> "should-not-compile",
       "unsound" -> "should-not-compile",
       "does-not-compile" -> "should-compile",
-      "error-messages" -> "usability")
+      "error-messages" -> "usability",
+      "community" -> "help wanted",
+      "feature" -> "enhancement")
 
     val all = Set(
       "improvement",
       "quickfix",
-      "community",
-      "feature",
+      "help wanted",
+      "enhancement",
       "blocker",
       "critical",
       "regression",
@@ -393,7 +424,10 @@ object export {
       "overloading",
       "name-mangling",
       "f-bounds",
-      "byname")
+      "byname",
+      "needinfo",
+      "wontfix",
+      "duplicate")
   }
 
 }

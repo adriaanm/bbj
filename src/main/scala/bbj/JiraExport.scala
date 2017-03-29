@@ -40,6 +40,8 @@ object export {
 
   lazy val assignees = issues.flatMap(_.assignee)
 
+  lazy val bodies = issues.flatMap(_.comments.map(_.body)) ++ issues.flatMap(_.description)
+
   def apply() = allIssues.toList
 
 
@@ -70,46 +72,71 @@ object export {
     lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
   }
 
-  // inspired by http://j2m.fokkezb.nl/J2M.js
-  def toMarkdown(s: String) = {
-    val intermed =
-      List(("""(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r, {
-        (m: Match) =>
-          val lang = Option(m.group(2)).getOrElse("scala")
-          val code = m.group(3)
-          s"```$lang$code```"
-      }),
-        ("""(?m)^h([0-6])\.(.*)$""".r, (m: Match) => "#" * {m.group(1).toInt} + m.group(2)),
-        ("""([*_])(.*)\1""".r, { m: Match =>
-          val to = if (m.group(1) == "*") "**" else "*"
-          to + m.group(2) + to
-        })
-      ).foldLeft(s) { case (s, (rx, replacer)) => rx.replaceAllIn(s, m => Regex.quoteReplacement(replacer(m))) }
+  object toMarkdown {
+    // compile patterns once
+    val code = """(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r
+    val header = """(?m)^h([0-6])\.(.*)$""".r
 
-    // TODO [this bug|https://issues.scala-lang.org/browse/SI-3448]
+    val quote     = """\{quote\}""".r
+    val norformat = """\{noformat\}""".r
 
-    List(
-      ("""`([^`\s]+)'""".r, "`$1`"), // normalize use of fancy `quoting', which usually means just `quoting`
-      ("""\{\{([^}]+)\}\}""".r, """`$1`"""),
-      ("""\?\?((?:.[^?]|[^?].)+)\?\?""".r, """<cite>$1</cite>"""),
-      ("""\+([^+]*)\+""".r, """<ins>$1</ins>"""),
-      ("""\^([^^]*)\^""".r, """<sup>$1</sup>"""),
-      ("""~([^~]*)~""".r, """<sub>$1</sub>"""),
-      ("""-([^-]*)-""".r, """~~$1~~"""), // must come after previous
-      ("""\[(.+?)\|(.+)\]""".r, """[$1]($2)"""),
-      ("""\[(.+?)\]([^\(]*)""".r, """<$1>$2"""),
-      ("""\{quote\}""".r, """```"""), // not correct, but users confused this with actual quoting quite often
-      ("""\{noformat\}""".r, """```"""),
-      ("""https://issues.scala-lang.org/browse/SI-(\d+)\s""".r,"""#$1"""),
-      ("""SI-(\d+)\b""".r,"""#$1""")
-    ).foldLeft(intermed) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
+    val fancyQuote  = """`([^`\s]+)'""".r
+    val verbatim    = """\{\{([^}]+)\}\}""".r
+    val insert      = """\+([^+]+)\+""".r
+    val superscript = """\^([^^]+)\^""".r
+    val subscript   = """~([^~]+)~""".r
+    val del         = """-([^-]+)-""".r
+    val strongOrEmphasis = """([*_])([^*_]+)\1""".r
+
+    val cite  = """\?\?((?:.[^?]|[^?].)+)\?\?""".r
+    val foot  = """\[(.+?)\]([^\(]*)""".r
+
+    val link  = """\[(.+?)\|(.+)\]""".r
+    val issueRefUrl = """https://issues.scala-lang.org/browse/SI-(\d+)\s""".r
+    val issueRef = """SI-(\d+)\b""".r
+
+    // inspired by http://j2m.fokkezb.nl/J2M.js
+    def apply(s: String) = {
+      val intermed =
+        List((code, {
+          (m: Match) =>
+            val lang = Option(m.group(2)).getOrElse("scala")
+            val code = m.group(3)
+            s"```$lang$code```"
+        }),
+          (header, (m: Match) => "#" * {
+            m.group(1).toInt
+          } + m.group(2)),
+          (strongOrEmphasis, { m: Match =>
+            val to = if (Option(m.group(1)).contains("*")) "**" else "*"
+            to + m.group(2) + to
+          })
+        ).foldLeft(s) { case (s, (rx, replacer)) => rx.replaceAllIn(s, m => Regex.quoteReplacement(replacer(m))) }
+
+      // TODO [this bug|https://issues.scala-lang.org/browse/SI-3448]
+      List(
+        (fancyQuote,  "`$1`"), // normalize use of fancy `quoting', which usually means just `quoting`
+        (verbatim,    "`$1`"),
+        (cite,        "<cite>$1</cite>"),
+        (insert,      "<ins>$1</ins>"),
+        (superscript, "<sup>$1</sup>"),
+        (subscript,   "<sub>$1</sub>"),
+        (del,         "~~$1~~"), // must come after previous
+        (link,        "[$1]($2)"),
+        (foot,        "<$1>$2"),
+        (quote,       "```"), // not correct, but users confused this with actual quoting quite often
+        (norformat,   "```"),
+        (issueRefUrl, "#$1"),
+        (issueRef,    "#$1")
+      ).foldLeft(intermed) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
+    }
   }
 
   def exportIssue(issue: Issue) = {
     val description =
       github.Description(
         title = issue.summary,
-        body = issue.description.map(toMarkdown).getOrElse(""),
+        body = issue.description.map(toMarkdown.apply).getOrElse(""),
         created_at = issue.created.toInstant,
         closed_at = issue.resolutionDate.map(_.toInstant),
         updated_at = issue.updated.toInstant,

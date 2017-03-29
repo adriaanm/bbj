@@ -80,20 +80,20 @@ object export {
     val quote     = """\{quote\}""".r
     val norformat = """\{noformat\}""".r
 
-    val fancyQuote  = """`([^`\s]+)'""".r
-    val verbatim    = """\{\{([^}]+)\}\}""".r
-    val insert      = """\+([^+]+)\+""".r
-    val superscript = """\^([^^]+)\^""".r
-    val subscript   = """~([^~]+)~""".r
-    val del         = """-([^-]+)-""".r
-    val strongOrEmphasis = """([*_])([^*_]+)\1""".r
+    val fancyQuote       = """\b`([^`\s]+)'\b""".r
+    val verbatim         = """\b\{\{([^}]+)\}\}\b""".r
+    val insert           = """\b\+([^+]+)\+\b""".r
+    val superscript      = """\b\^([^^]+)\^\b""".r
+    val subscript        = """\b~([^~]+)~\b""".r
+    val del              = """\b-([^-]+)-\b""".r
+    val strongOrEmphasis = """\b([*_])([^*_]+)\1\b""".r
 
-    val cite  = """\?\?((?:.[^?]|[^?].)+)\?\?""".r
+//    val cite  = """\?\?((?:.[^?]|[^?].)+)\?\?""".r // loops
     val foot  = """\[(.+?)\]([^\(]*)""".r
 
     val link  = """\[(.+?)\|(.+)\]""".r
     val issueRefUrl = """https://issues.scala-lang.org/browse/SI-(\d+)\s""".r
-    val issueRef = """SI-(\d+)\b""".r
+    val issueRef = """\bSI-(\d+)\b""".r
 
     // inspired by http://j2m.fokkezb.nl/J2M.js
     def apply(s: String) = {
@@ -117,7 +117,7 @@ object export {
       List(
         (fancyQuote,  "`$1`"), // normalize use of fancy `quoting', which usually means just `quoting`
         (verbatim,    "`$1`"),
-        (cite,        "<cite>$1</cite>"),
+//        (cite,        "<cite>$1</cite>"), // disable because the regex loops, also seems unlikely to be used
         (insert,      "<ins>$1</ins>"),
         (superscript, "<sup>$1</sup>"),
         (subscript,   "<sub>$1</sub>"),

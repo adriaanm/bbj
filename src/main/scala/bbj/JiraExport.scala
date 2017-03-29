@@ -8,6 +8,7 @@ import akka.stream.ActorMaterializer
 import scala.concurrent.Await.result
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
+import scala.util.matching.Regex
 import scala.util.matching.Regex.Match
 
 
@@ -72,14 +73,18 @@ object export {
   // inspired by http://j2m.fokkezb.nl/J2M.js
   def toMarkdown(s: String) = {
     val intermed =
-      List(("""(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r, (m: Match) => s"```${Option(m.group(2)).getOrElse("scala")}${m.group(3)}```"),
-        ("""(?m)^h([0-6])\.(.*)$""".r, (m: Match) => "#" * {m.group(1).toInt} + m.group(2))
-        //,
-//        ("""([*_])(.*)\1""".r, { m: Match =>
-//          val to = if (m.group(1) == "*") "**" else "*"
-//          to + m.group(2) + to
-//        })
-      ).foldLeft(s) { case (s, (rx, repl)) => rx.replaceAllIn(s, repl) }
+      List(("""(?s)\{code(:([a-z]+))?\}(.*?)\{code\}""".r, {
+        (m: Match) =>
+          val lang = Option(m.group(2)).getOrElse("scala")
+          val code = m.group(3)
+          s"```$lang$code```"
+      }),
+        ("""(?m)^h([0-6])\.(.*)$""".r, (m: Match) => "#" * {m.group(1).toInt} + m.group(2)),
+        ("""([*_])(.*)\1""".r, { m: Match =>
+          val to = if (m.group(1) == "*") "**" else "*"
+          to + m.group(2) + to
+        })
+      ).foldLeft(s) { case (s, (rx, replacer)) => rx.replaceAllIn(s, m => Regex.quoteReplacement(replacer(m))) }
 
     // TODO [this bug|https://issues.scala-lang.org/browse/SI-3448]
 

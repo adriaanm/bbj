@@ -1,16 +1,11 @@
 package bbj
 
-import java.time.{Instant, OffsetDateTime, ZoneId, ZoneOffset}
-
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import fastparse.core
 
 import scala.concurrent.Await.result
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
-import scala.util.matching.Regex
-import scala.util.matching.Regex.Match
 
 
 object export {
@@ -75,57 +70,82 @@ object export {
 
   object toMarkdown {
     import fastparse.all._
+    type PS = Parser[String]
 
-    lazy val s = P (CharPred(c => c.isWhitespace) | End | Start)
-    lazy val ws = s.rep.!
+    private val join: ((String, String)) => String = { case (x,y) => x+y }
+    private val join3: ((String, String, String)) => String = { case (x,y,z) => x+y+z }
+    private def remark(open: String, close: String)(x: String) = open + x + close
+    private def remark(open: String)(x: String) = open + x + open
 
-    def markedLR(boundaryL: P[Unit], boundaryR: P[Unit]) =
-      P( ws ~ boundaryL ~ (!(boundaryR ~ s) ~ markedText).! ~ boundaryR ~ ws)
+    lazy val lineEnd = P("\n") | End
+    lazy val skipToNextLine: P0 = lineEnd | ((!lineEnd ~ CharPred(_.isWhitespace)).rep ~ lineEnd).map(_ => ())
 
-    def marked(boundary: P[Unit]) = markedLR(boundary, boundary)
+    // non-empty whitespace, including lineend, or the end of input (used to demarcate words)
+    lazy val ws: PS = P(CharPred(_.isWhitespace).rep(1).! | End.map(_ => ""))
+    lazy val wsNotEOL: PS = (!lineEnd ~ CharPred(_.isWhitespace)).rep(1).! | End.map(_ => "")
 
-    // compile patterns once
+    lazy val num = P(CharPred(_.isDigit)).rep(min=1)
+
+
+    def wsSep(p: PS): PS = (p ~ (wsNotEOL ~ p).map(join).rep.map(_.mkString(""))).map(join)
+
+    def marked(delim: String): PS = P(op(delim) ~ wsSep((!op(delim) ~ markedWord) | unmarkedWord(op(delim))) ~ op(delim)).map(_.mkString(""))
+
+    private def unmarkedWord(delim: P0): PS = (!(delim ~ ws | ws) ~ AnyChar.!).rep(1).map(_.mkString(""))
+
+    def op(s: String) = P(!(&("\\")) ~ s)
+
+    // a word, no whitespace on either side
+    lazy val markedWord: PS =
+      verbatim | insert | superscript | subscript | del | strong | emphasis // | link | issueRef | foot
+
+    lazy val insert      : PS = marked("+") map remark("<ins>", "</ins>")
+    lazy val superscript : PS = marked("^") map remark("<sup>", "</sup>")
+    lazy val subscript   : PS = marked("~") map remark("<sub>", "</sub>")
+    lazy val del         : PS = marked("-") map remark("~~")
+    lazy val strong      : PS = marked("*") map remark("**")
+    lazy val emphasis    : PS = marked("_") map remark("*")
+
+
+    // TODO
+//    lazy val link: PS = "[ | ]"    "[$1]($2)"
+//    val issueRefUrl = P("https://issues.scala-lang.org/browse/SI-"~num)
+//    lazy val issueRef: PS = """\bSI-(\d+)\b"""
+//
+//    lazy val foot: PS  = "[ ]( )" "<$1>$2"
+
+
+    // consume whole lines, assuming we're at the start of a line, consuming up to and including line end
+    lazy val anyLine = (!lineEnd ~ AnyChar).rep ~ lineEnd
+    lazy val wikiLine: PS =
+      block | (header ~ wsNotEOL ~ wikiLineRest).map(join3) | (bullets ~ wikiLineRest).map(join) | wikiLineRest
+    def codeLine(delim: String): PS = (!blockEnd(delim) ~ anyLine).!
+
+    lazy val wikiLineRest: PS = (wsSep(markedWord | unmarkedWord(Pass)) ~ lineEnd.!).map(join)
+
+    // can span lines
+    lazy val verbatim = op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`"))
+
+    // at start of line
+    lazy val header: PS = P("h" ~ CharIn("123456").! ~".") map (i => "#" * i.toInt)
+    lazy val bullets: PS = ("-" | "#" | "*").!.rep(1) map ( bs => " "*(bs.length-1)+"-")
+    lazy val block: PS =
+      (blockOpen ~ skipToNextLine) flatMap { case (tag, lang) =>
+        (codeLine(tag).rep.map(_.mkString("\n")) ~ blockEnd(tag) ~ lineEnd) map { c =>
+          s"```$lang\n$c\n```"
+        }
+      }
+
+    // helper for blocks
     lazy val lang = CharPred(_.isLetter).rep.!
-
-    lazy val insert           = marked(P("+"))             map {case (wsl, x, wsr) => s"$wsl<ins>$x</ins>$wsr"
-    lazy val superscript      = marked(P("^"))             map {case (wsl, x, wsr) => s"$wsl<sup>$x</sup>$wsr"
-    lazy val subscript        = marked(P("~"))             map {case (wsl, x, wsr) => s"$wsl<sub>$x</sub>$wsr"
-    lazy val del              = marked(P("-"))             map {case (wsl, x, wsr) => s"$wsl~~$x~~$wsr"
-    lazy val strong           = marked(P("*"))             map {case (wsl, x, wsr) => s"$wsl**$x**$wsr"
-    lazy val emphasis         = marked(P("_"))             map {case (wsl, x, wsr) => s"$wsl*$x*$wsr"
-    lazy val fancyQuote       = markedLR(P("`"), P("'"))   map {case (wsl, x, wsr) => s"$wsl'$x'$wsr" // normalize use of fancy `quoting' to 'quoting'
-
-    lazy val verbatim         = P("{{") ~ ((!P("}}") ~ unmarkedWord).rep map (x => x.mkString("`", "", "`"))) ~ P("}}")
-
-    lazy val wikiLine: Parser[String] =
-      lineStart ~ (codeBlock | header | bulletLine | wikiLineRest) ~ lineEnd
-
-    lazy val wikiLineRest: Parser[String] = verbatim | markedText |
-
-    lazy val markedText: Parser[String] =
-      insert | superscript | subscript | del | strong | fancyQuote | unmarkedWord
-
-    lazy val unmarkedWord = ws ~ (!s ~ AnyChar).rep.! ~ ws map { case (wsl, word, wsr) => wsl+word+wsr }
-    lazy val code = AnyChar.rep.! // TODO
-
-    val codeBlock = P(
-      "{code"~ (":"~ lang).? ~"}" ~ code ~ "{code}" map {
-        case (lang, code) => s"```${lang.getOrElse("scala")}$code```"
-      })
+    lazy val codeLang = P("code".! ~ ((":" ~ lang.!) | Pass.map(_ => "scala")))
+    lazy val blockOpen = op("{")~ (codeLang | (("quote" | "noformat").! ~ Pass.map(_ => ""))) ~ op("}")
+    def blockEnd(tag: String): P0 = op("{")~ tag ~op("}")
 
 
-    val quote     = """\{quote\}""".r
-    val norformat = """\{noformat\}""".r
+    lazy val textile = wikiLine.rep.map(_.mkString("\n"))
 
-    val header = """(?m)^h([0-6])\.(.*)$""".r
-
-    val foot  = """\[(.+?)\]([^\(]*)""".r  "<$1>$2"
-    val link  = """\[(.+?)\|(.+)\]""".r    "[$1]($2)"
-    val issueRefUrl = """https://issues.scala-lang.org/browse/SI-(\d+)\s""".r
-    val issueRef = """\bSI-(\d+)\b""".r
-
-
-    def apply(s: String): String = {}
+    def apply(s: String): String = ""
   }
 
   def exportIssue(issue: Issue) = {

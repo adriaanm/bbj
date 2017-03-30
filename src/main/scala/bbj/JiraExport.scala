@@ -92,9 +92,9 @@ object export {
 
     //
     def marked(delim: String): PS =
-      P(op(delim) ~ wsSep(!op(delim) ~ (markedWord | unmarkedWord)) ~ op(delim)).map(_.mkString(""))
+      P(op(delim) ~ wsSep(!op(delim) ~ (markedWord | unmarkedWord(op(delim)))) ~ op(delim)).map(_.mkString(""))
 
-    private def unmarkedWord: PS = (!ws ~ AnyChar).!.rep(1).map(_.mkString(""))
+    private def unmarkedWord(delim: P0): PS = (!(ws | delim ~ ws) ~ AnyChar).!.rep(1).map(_.mkString(""))
 
     def op(s: String) = P(!(&("\\")) ~ s)
 
@@ -125,7 +125,7 @@ object export {
 
     def codeLine(delim: String): PS = (!blockEnd(delim) ~ anyLine).!
 
-    lazy val wikiLineRest: PS = (wsSep(markedWord | unmarkedWord) ~ lineEnd.!).map(join)
+    lazy val wikiLineRest: PS = (wsSep(markedWord | unmarkedWord(Pass)) ~ lineEnd.!).map(join)
 
     // can span lines
     lazy val verbatim = op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`"))

@@ -51,7 +51,7 @@ object toMarkdown {
 
   lazy val linkSep = op("|")
   lazy val url = issueUrl.map(i => s"https://github.com/$repoRef/issues/$i") | unmarkedWord("]")
-  lazy val linkDesc = P(wikiLineRest(linkSep).! ~ linkSep)
+  lazy val linkDesc = P(wikiLineRest(linkSep).! ~ linkSep) // TODO: wikiLine accepts a newline, but a link description probably shouldn't
   lazy val link: PS = P(("[" ~ linkDesc.? ~ url.! ~ "]").map{
     case (Some(desc), href) => s"[$desc]($href)"
     case (_, href) => href
@@ -69,7 +69,8 @@ object toMarkdown {
 
   def codeLine(delim: String): PS = P(!blockEnd(delim) ~ anyLine)
 
-  def wikiLineRest(delim: P0 = Fail): PS = P((phrase(delim) ~  (lineEnd.! | (&(delim) | End).map(_ => ""))).map(join))
+  // consumes, but does not emit newline in output
+  def wikiLineRest(delim: P0 = Fail): PS = P((phrase(delim) ~  (lineEnd | &(delim) | End).map(_ => "")).map(join))
 
   // can span lines
   lazy val verbatim = P(op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`")))

@@ -77,21 +77,24 @@ object export {
     private def remark(open: String, close: String)(x: String) = open + x + close
     private def remark(open: String)(x: String) = open + x + open
 
-    lazy val lineEnd = P("\n") | End
-    lazy val skipToNextLine: P0 = lineEnd | ((!lineEnd ~ CharPred(_.isWhitespace)).rep ~ lineEnd).map(_ => ())
-
-    // non-empty whitespace, including lineend, or the end of input (used to demarcate words)
-    lazy val ws: PS = P(CharPred(_.isWhitespace).rep(1).! | End.map(_ => ""))
-    lazy val wsNotEOL: PS = (!lineEnd ~ CharPred(_.isWhitespace)).rep(1).! | End.map(_ => "")
-
-    lazy val num = P(CharPred(_.isDigit)).rep(min=1)
-
+    private val wsChar = CharPred(_.isWhitespace)
+    private val lineEnd = P("\n") | End
+    private val wsCharNotEOL = !lineEnd ~ wsChar
+    val skipToNextLine: P0 = lineEnd | (wsCharNotEOL.rep ~ lineEnd).map(_ => ())
 
     def wsSep(p: PS): PS = (p ~ (wsNotEOL ~ p).map(join).rep.map(_.mkString(""))).map(join)
 
-    def marked(delim: String): PS = P(op(delim) ~ wsSep((!op(delim) ~ markedWord) | unmarkedWord(op(delim))) ~ op(delim)).map(_.mkString(""))
+    // non-empty whitespace, including lineend, or the end of input (used to demarcate words)
+    lazy val ws: PS = wsChar.rep(1).! | End.map(_ => "")
+    lazy val wsNotEOL: PS = wsCharNotEOL.rep(1).! | End.map(_ => "")
 
-    private def unmarkedWord(delim: P0): PS = (!(delim ~ ws | ws) ~ AnyChar.!).rep(1).map(_.mkString(""))
+    lazy val num = P(CharPred(_.isDigit)).rep(min=1)
+
+    //
+    def marked(delim: String): PS =
+      P(op(delim) ~ wsSep(!op(delim) ~ (markedWord | unmarkedWord)) ~ op(delim)).map(_.mkString(""))
+
+    private def unmarkedWord: PS = (!ws ~ AnyChar).!.rep(1).map(_.mkString(""))
 
     def op(s: String) = P(!(&("\\")) ~ s)
 
@@ -116,19 +119,20 @@ object export {
 
 
     // consume whole lines, assuming we're at the start of a line, consuming up to and including line end
-    lazy val anyLine = (!lineEnd ~ AnyChar).rep ~ lineEnd
+    lazy val anyLine: PS = ((!lineEnd ~ AnyChar).rep ~ lineEnd).!
     lazy val wikiLine: PS =
-      block | (header ~ wsNotEOL ~ wikiLineRest).map(join3) | (bullets ~ wikiLineRest).map(join) | wikiLineRest
+      block | (header ~ wsNotEOL ~ wikiLineRest).map(join3) | (bullets ~ wsNotEOL ~ wikiLineRest).map(join3) | wikiLineRest
+
     def codeLine(delim: String): PS = (!blockEnd(delim) ~ anyLine).!
 
-    lazy val wikiLineRest: PS = (wsSep(markedWord | unmarkedWord(Pass)) ~ lineEnd.!).map(join)
+    lazy val wikiLineRest: PS = (wsSep(markedWord | unmarkedWord) ~ lineEnd.!).map(join)
 
     // can span lines
     lazy val verbatim = op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`"))
 
     // at start of line
     lazy val header: PS = P("h" ~ CharIn("123456").! ~".") map (i => "#" * i.toInt)
-    lazy val bullets: PS = ("-" | "#" | "*").!.rep(1) map ( bs => " "*(bs.length-1)+"-")
+    lazy val bullets: PS = (("-" | "#" | "*").!.rep(1) map ( bs => " "*(bs.length-1)+"-"))
     lazy val block: PS =
       (blockOpen ~ skipToNextLine) flatMap { case (tag, lang) =>
         (codeLine(tag).rep.map(_.mkString("\n")) ~ blockEnd(tag) ~ lineEnd) map { c =>

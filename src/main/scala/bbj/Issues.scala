@@ -259,7 +259,7 @@ case class Issue(key: String, fields: Map[String, Any]) {
   def updated          = fields get "updated"        collect { case x: OffsetDateTime => x } get
   def resolutionDate   = fields get "resolutiondate" collect { case x: Option[OffsetDateTime] => x } get
 
-  def closed           = (fields get "status"         collect { case x: String => x } get) == "Closed"
+  def closed           = (fields get "status"         collect { case x: String => x } get) == "CLOSED"
 
   def issueType        = fields get "issuetype"      collect { case x: String => x } get
   def priority         = fields get "priority"       collect { case x: String => x } get

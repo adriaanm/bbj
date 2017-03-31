@@ -65,7 +65,6 @@ object export {
     def createIssues(from: Int, to: Int) =
       issues.toIterator.slice(from, to).map(exportIssue).map(i => result(createIssue(i), Duration.Inf)).toList
 
-    lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
   }
 
 
@@ -131,9 +130,10 @@ object export {
   }
 
   object Milestones {
+    lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
 
     def fromVersion(v: Version): Option[Int] =
-      github.allMilestones find (_.title == v.name) flatMap (_.number)
+      allMilestones find (_.title == v.name) flatMap (_.number)
 
     val all = List(
       "Backlog",

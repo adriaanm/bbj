@@ -20,6 +20,7 @@ object toMarkdown {
 
   // non-empty whitespace, including line-end, or the end of input (used to demarcate words)
   lazy val ws: PS = P(wsChar.rep(1).!)
+  lazy val skipWs: P0 = P((!lineEnd ~ wsChar).rep)
   lazy val wsNotEOL: PS = P(wsCharNotEOL.rep(1).!) // do not allow End, as we rep this parser
 
   lazy val num = P(CharPred(_.isDigit)).rep(min=1)
@@ -30,10 +31,11 @@ object toMarkdown {
 
   def words(p: PS): PS = P((p ~ (wordSep ~ p.?.map(_.getOrElse(""))).map(join).rep.map(_.mkString(""))).map(join))
 
-  lazy val wordSep: PS = P(wsNotEOL | CharIn(",.;:!/&|").!)
+  lazy val wordSep: PS = P(wsNotEOL | CharIn(",.;:!/&").!) // do not include "|" because it separates a link's description from the url
   private def phrase(delim: P0) = words(markedWord | unmarkedWord(delim))
 
-  def unmarkedWord(delim: P0): PS = (!(ws | delim) ~ AnyChar.!).rep(1).map(_.mkString(""))
+  def unmarkedWord(delim: P0): PS =
+    P((!(ws | delim) ~ AnyChar.!).rep(1).map(_.mkString("")))
 
   def op(s: String) = P(!(&("\\")) ~ s)
 
@@ -51,11 +53,11 @@ object toMarkdown {
 
   lazy val linkSep = op("|")
   lazy val url = issueUrl.map(i => s"https://github.com/$repoRef/issues/$i") | unmarkedWord("]")
-  lazy val linkDesc = P(wikiLineRest(linkSep).! ~ linkSep) // TODO: wikiLine accepts a newline, but a link description probably shouldn't
-  lazy val link: PS = P(("[" ~ linkDesc.? ~ url.! ~ "]").map{
-    case (Some(desc), href) => s"[$desc]($href)"
-    case (_, href) => href
-  })
+  // don't parse [bla] as a link because it's often not one
+  lazy val link: PS = P(
+    (    "["  ~ skipWs ~ phrase(linkSep).! ~ skipWs ~ linkSep ~ skipWs ~ url.! ~ skipWs ~ "]").map{ case (desc, href) => s"[$desc]($href)" }
+      | ("[~" ~ skipWs ~ unmarkedWord("]").map(User.toGithub.get).filter(_.nonEmpty) ~ skipWs ~ "]").map{ case user => s"@${user.get}" }
+    )
 
   lazy val issueUrl = P("https://issues.scala-lang.org/browse/SI-" ~ num.!)
   lazy val issueRef: PS = P("SI-" ~ num.! | issueUrl).map(i => s"$repoRef#$i")
@@ -70,14 +72,20 @@ object toMarkdown {
   def codeLine(delim: String): PS = P(!blockEnd(delim) ~ anyLine)
 
   // consumes, but does not emit newline in output
-  def wikiLineRest(delim: P0 = Fail): PS = P((phrase(delim) ~  (lineEnd | &(delim) | End).map(_ => "")).map(join))
+  def wikiLineRest(delim: P0 = Fail): PS =
+    P((phrase(delim) ~  (lineEnd | &(delim) | End).map(_ => "")).map(join))
 
   // can span lines
-  lazy val verbatim = P(op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`")))
+  lazy val verbatim =
+    P(op("{{") ~ (!op("}}") ~ AnyChar.!).rep ~ op("}}") map (_.mkString("`", "", "`")))
 
   // at start of line
   lazy val header: PS = P("h" ~ CharIn("123456").! ~".") map (i => "#" * i.toInt)
-  lazy val bullets: PS = P(("-" | "#" | "*").!.rep(1) map (bs => " "*(bs.length-1)+"-"))
+
+  lazy val bullets: PS =
+    (!"--- " ~ // don't parse diff as bullets
+      P(("-" | "#" | "*").!.rep(1)) map (bs => " "*(bs.length-1)+"-"))
+
   lazy val block: PS = P(
     (blockOpen ~ skipToNextLine) flatMap { case (tag, langName) =>
       (codeLine(tag).rep.map(_.mkString("\n")) ~ blockEnd(tag) ~ skipToNextLine) map { c =>
@@ -88,13 +96,14 @@ object toMarkdown {
   // helper for blocks
   lazy val lang = P(CharPred(_.isLetter).rep.!)
   lazy val codeLang = P("code".! ~ ((":" ~ lang.!) | Pass.map(_ => "scala")))
+
   // we lump all block formats together, as users often confused quote for code....
-  lazy val blockOpen = P(op("{")~ (codeLang | (("quote" | "noformat").! ~ Pass.map(_ => ""))) ~ op("}"))
-  def blockEnd(tag: String): P0 = P(op("{")~ tag ~op("}"))
+  // skip leading whitespace before tag to be nice
+  lazy val blockOpen = P(skipWs ~ op("{")~ (codeLang | (("quote" | "noformat").! ~ Pass.map(_ => ""))) ~ op("}"))
+  def blockEnd(tag: String): P0 = P(skipWs ~ op("{")~ tag ~op("}"))
 
   lazy val textile = P((wikiLine | anyLine).rep.map(_.mkString("\n")) ~ End) // all or nothing baby
 
   def apply(s: String): String =
     textile.parse(s).fold((_, _, _) => s, (res, _) => res)
 }
-

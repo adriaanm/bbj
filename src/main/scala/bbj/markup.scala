@@ -65,7 +65,10 @@ object toMarkdown {
   // consume whole lines, assuming we're at the start of a line, consuming up to and including line end
   // defend against matching just End, since that would loop when we `rep` this parser
   // the line parsers don't actually include a final newline
+  // TODO: this fails to parse the last line if it doesn't end in a newline, but adding | End will loop on empty lines because we rep?
   lazy val anyLine: PS = P((!lineEnd ~ AnyChar).rep.! ~ lineEnd)
+  // TODO: should parse:
+  //  "Could we do better? Given that {{T <: Program}} on branch 1, and {{Program}} is final, could we infer that {{T == Program}}? This looks like a common case, and a worthwhile ehancement."
   lazy val wikiLine: PS =
     P(block | (header ~ wsNotEOL ~ wikiLineRest()).map(join3) | (bullets ~ wsNotEOL ~ wikiLineRest()).map(join3) | wikiLineRest())
 

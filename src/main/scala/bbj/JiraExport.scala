@@ -1,12 +1,25 @@
 package bbj
 
+import java.time.{Instant, OffsetDateTime, ZoneId}
+import java.time.format.{DateTimeFormatter, FormatStyle}
+
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 
+import scala.collection.immutable.IndexedSeq
 import scala.concurrent.Await.result
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
+import scala.util.Try
 
+object format {
+  def dateTime(date: OffsetDateTime) = instant(date.toInstant)
+
+  def instant(instant: Instant) =
+    Try {
+      DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withZone(ZoneId.of("UTC")).format(instant)+" UTC"
+    } getOrElse(instant.toString)
+}
 
 object export {
   implicit val system = ActorSystem("BBJ")
@@ -20,13 +33,15 @@ object export {
   }
 
   // TODO: not yet fully reliable
-  def allIssues = (1 to 10250).grouped(1024) map { batch =>
+  def allIssues: Iterator[Option[Issue]] = ((1 to 10250).grouped(1024) map { batch =>
     result(Future.sequence(batch map (i => jira.getIssue(s"SI-$i"))), Duration.Inf)
-  }
+  }).flatten
 
+  private def deletedIssue(key: String) = Issue(key, Map.empty)
   // filter on project because some issues were moved -- we are only moving the SI ones
   // 57 issues were moved, 43 were deleted, so we end up with 100 less than we fetch
-  lazy val issues = allIssues.flatten.flatten.filter(_.fields("project") == "SI").toList
+  lazy val issues: List[Issue] = allIssues.zipWithIndex.flatMap { case (issue, idx) => issue.orElse(Some(deletedIssue(s"SI-${idx + 1}"))) }.toList
+
 
   lazy val labelFreq = {
     val labelMap = issues.map(i => (i, Labels.fromIssue(i)))
@@ -45,45 +60,63 @@ object export {
     val materializer = export.materializer
     val context = system.dispatcher
 
-    def createBugRepo = createRepo(new Repository(repoName, true, Some("The bug tracker for the Scala programming language. Please do not use for questions or feature requests.")))
+    def createBugRepo = result(
+      createRepo(new Repository(repoName, false, Some("The bug tracker for the Scala programming language. Please do not use for questions or feature requests."))),
+      Duration.Inf)
 
-    def createLabels = Future.sequence(Labels.all.map(name => createLabel(Label(name))))
+
+    def createLabels = result(Future.sequence(
+      Labels.all.toList.map(name => createLabel(Label(name)))),
+      Duration.Inf)
 
     def createMilestones = {
-      val allFixVersions = issues.flatMap(_.fixVersions).distinct
+      val allVersions = issues.flatMap(i => i.fixVersions ++ i.affectedVersions).distinct
       val milestones = Milestones.all.map { name =>
-        val version = allFixVersions.find(_.toString == name)
+        val version = allVersions.find(_.toString == name)
         val date = version.flatMap(_.releaseDate).map(d => d.toInstant)
         val state = version.map(v => if (!v.released) "open" else "closed")
 
         Milestone(title = name, description = version.flatMap(_.description), state = state, due_on = date)
       }
 
-      milestones.map(m => result(createMilestone(m), Duration.Inf))
+      result(Future.sequence(
+        milestones.map(createMilestone)),
+        Duration.Inf)
     }
 
+    // ZERO-BASED :roll_eyes:
     def createIssues(from: Int, to: Int) =
-      issues.toIterator.slice(from, to).map(exportIssue).map(i => result(createIssue(i), Duration.Inf)).toList
+      steadily(issues.toIterator.slice(from, to).map(exportIssue))(createIssue)
 
   }
 
-
   def exportIssue(issue: Issue) = {
     val description =
-      github.Description(
+      if (issue.fields.isEmpty) github.Description(
+        title = "(Issue was deleted)",
+        body = ":wastebasket:",
+        created_at = Instant.EPOCH,
+        closed_at = Some(Instant.EPOCH),
+        updated_at = Instant.EPOCH,
+        assignee = None,
+        milestone = None,
+        closed = true,
+        labels = Nil)
+      else github.Description(
         title = issue.summary,
-        body = issue.description.map(toMarkdown.apply).getOrElse(""),
+        body = issue.description.map(toMarkdown.apply).getOrElse(s"(No description for ${issue.key}.)"),
         created_at = issue.created.toInstant,
         closed_at = issue.resolutionDate.map(_.toInstant),
         updated_at = issue.updated.toInstant,
-        assignee = None, // TODO: when no long in private repo, issue.assignee.flatMap(_.toGithub),
+        assignee = issue.assignee.flatMap(_.toGithub),
         milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
         closed = issue.closed,
         labels = Labels.fromIssue(issue))
 
-    def metaComment = {
-      val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}" // TODO: if we end up redirecting from jira to github, these links won't work :smirk: -- add token to escape the future redirect? or already create an issues-archive subdomain?
+    // TODO: if we end up redirecting from jira to github, these links won't work :smirk: -- add token to escape the future redirect? or already create an issues-archive subdomain?
 
+    def metaComment = {
+      val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}?orig=1"
       val reporter = s"Reporter: ${issue.reporter}"
 
       val affected =
@@ -99,24 +132,31 @@ object export {
         if (ghrefs.isEmpty) "" else s"${kind} ${ghrefs.mkString(", ")}"
       }.filterNot(_.isEmpty)
 
+      val attachments =
+        if (issue.attachments.isEmpty) Nil
+        else "Attachments:" :: issue.attachments.map(a => s" - $a")
 
-      val extras = from :: reporter :: (affected ++ alsoFixedIn ++ crossRefs)
+      val extras = from :: reporter :: (affected ++ alsoFixedIn ++ crossRefs ++ attachments)
 
-      github.Comment(extras.mkString("\n", "\n", ""), None)
+      github.Comment(extras.mkString("\n", "\n", ""), Some(issue.created.toInstant))
     }
 
 
     def ghcomment(c: Comment) = {
       val edited =
         if (c.updated == c.created) ""
-        else if (c.updateAuthor != c.author) s" (edited by ${c.updateAuthor} on ${c.updated})"
-        else s" (edited on ${c.updated})"
+        else {
+          val editedOn = format.dateTime(c.updated)
+          if (c.updateAuthor != c.author) s" (edited by ${c.updateAuthor} on $editedOn)"
+          else s" (edited on $editedOn)"
+        }
 
       github.Comment(s"${c.author} said$edited:\n${toMarkdown(c.body)}", Some(c.created.toInstant))
     }
 
     val comments =
-      metaComment :: issue.comments.map(ghcomment)
+      if (issue.fields.isEmpty) Nil
+      else metaComment :: issue.comments.map(ghcomment)
 
     // ignored:
     // attachments
@@ -133,7 +173,7 @@ object export {
     lazy val allMilestones: List[github.Milestone] = result(github.milestones, Duration.Inf)
 
     def fromVersion(v: Version): Option[Int] =
-      allMilestones find (_.title == v.name) flatMap (_.number)
+      allMilestones find (_.title == v.toString) flatMap (_.number)
 
     val all = List(
       "Backlog",
@@ -154,6 +194,7 @@ object export {
       "2.9.2",
       "2.9.3-RC1",
       "2.9.3-RC2",
+      "2.9.3",
       "2.10.0-M1",
       "2.10.0-M2",
       "2.10.0-M3",
@@ -167,6 +208,8 @@ object export {
       "2.10.0-RC5",
       "2.10.0",
       "2.10.1-RC1",
+      "2.10.1-RC2",
+      "2.10.1-RC3",
       "2.10.1",
       "2.10.2-RC1",
       "2.10.2-RC2",
@@ -190,6 +233,7 @@ object export {
       "2.11.0-M7",
       "2.11.0-M8",
       "2.11.0-RC1",
+      "2.11.0-RC2",
       "2.11.0-RC3",
       "2.11.0-RC4",
       "2.11.0",

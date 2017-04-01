@@ -105,6 +105,7 @@ object User {
     "jinfu.leng"                     -> "jinfu-leng", // Jinfu Leng
     "jnordenberg"                    -> "jesnor",
     "jodersky"                       -> "jodersky", // jodersky
+    "jpretty"                        -> "propensive",
     "jroper"                         -> "jroper",
     "jrudolph"                       -> "jrudolph",
     "jsalvata"                       -> "jsalvata",
@@ -214,7 +215,11 @@ case class User(name: String, displayName: String, emailAddress: Option[String])
 
   override def toString = toGithub match {
     case Some(userName) => s"@$userName" // at-mention if user is known (no notification is sent on bulk import)
-    case None => s"${sanitize(displayName)} (${sanitize(name)})"
+    case None =>
+      val disp = sanitize(displayName)
+      val user = sanitize(name)
+      if (disp == user) user
+      else s"${disp} (${user})"
   }
 }
 
@@ -224,7 +229,9 @@ case class Version(name: String, description: Option[String], releaseDate: Optio
 
 case class Comment(author: User, body: String, updateAuthor: User, created: OffsetDateTime, updated: OffsetDateTime)
 
-case class Attachment(filename: String, author: User, created: OffsetDateTime, content: String, size: Int, mimeType: String, properties: Map[String, Any])
+case class Attachment(filename: String, author: User, created: OffsetDateTime, url: String, size: Int, mimeType: String, properties: Map[String, Any]) {
+  override def toString = s"[$filename]($url) (created on ${format.dateTime(created)}, $size bytes)"
+}
 
 sealed class IssueLinkType(val name: String)
 
@@ -249,9 +256,9 @@ case class Issue(key: String, fields: Map[String, Any]) {
   def description      = fields get "description"    collect { case x: Option[String] => x } get
 
   // pick a milestone
-  def fixVersions      = fields get "fixVersions"    collect { case x: List[Version] => x } get
+  def fixVersions      = fields get "fixVersions"    collect { case x: List[Version] => x } getOrElse(Nil)
   // use label?
-  def affectedVersions = fields get "versions"       collect { case x: List[Version] => x } get
+  def affectedVersions = fields get "versions"       collect { case x: List[Version] => x } getOrElse(Nil)
 
   def assignee         = fields get "assignee"       collect { case x: Option[User] => x } get
   def reporter         = fields get "reporter"       collect { case x: User => x } get
@@ -268,13 +275,14 @@ case class Issue(key: String, fields: Map[String, Any]) {
   def labels           = fields get "labels"         collect { case x: List[String] => x } get
   def environment      = fields get "environment"    collect { case x: Option[String] => x } get
 
-  def comments         = fields get "comment"        collect { case x: List[Comment] => x } get
+  def comments         = fields get "comment"        collect { case x: List[Comment] => x } getOrElse(Nil)
   def issuelinks       = fields get "issuelinks"     collect { case x: List[IssueLink] => x } get
+
+  def attachments      = fields get "attachment"     collect { case x: List[Attachment] => x } getOrElse(Nil)
 
 //
 //  def lastViewed       = fields get "lastViewed"     collect { case x: Option[Date] => x }
 //  def dueDate          = fields get "duedate"        collect { case x: Option[Date] => x }
-//  def attachment       = fields get "attachment"     collect { case x: List[Attachment] => x }
 //  def creator          = fields get "creator"        collect { case x: User => x }
 //  def votes            = fields get "votes"          collect { case x: Future[List[User]] => x }
 //  def watches          = fields get "watches"        collect { case x: Future[List[User]] => x }

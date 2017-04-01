@@ -6,9 +6,11 @@ import java.time.{Instant, OffsetDateTime, OffsetTime}
 import java.util.Date
 
 import play.api.libs.json._
-import play.api.libs.ws.{WS, WSAuthScheme}
+import play.api.libs.ws.{WS, WSAuthScheme, WSResponse}
 
-import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
+import scala.util.Try
 
 trait JiraConnection extends JsonConnection {
 
@@ -295,12 +297,54 @@ trait GithubConnection extends JsonConnection {
   def createJson(kind: String, jsValue: JsValue) =
     tryAuthUrl(s"$apiRepo/$kind").post(jsValue) map { resp => if (resp.status == 201) "ok" else s"error: $resp (for $jsValue)" }
 
+  case class Rate(retryAfterMillis: Option[Int], limit: Option[Int], remaining: Option[Int], reset: Option[Instant])
+
   def createLabel(label: Label) = createJson("labels", Json.toJson(label))
   def createMilestone(milestone: Milestone) = createJson("milestones", Json.toJson(milestone))
-  def createIssue(issue: Issue) = tryAuthUrl(s"$apiRepo/import/issues").post(Json.toJson(issue)) map (_.json.validate[IssueResponse])
+  def createIssue(issue: Issue): Future[(WSResponse, JsResult[IssueResponse])] =
+    tryAuthUrl(s"$apiRepo/import/issues").post(Json.toJson(issue)).map(resp => (resp, resp.json.validate[IssueResponse]))
 
+  def steadily[T, U](xs: Iterator[T])(f: T => Future[(WSResponse, JsResult[U])]): Iterator[JsResult[U]] = {
+    xs map { x =>
+      def attempt(retries: Int = 3): JsResult[U] = {
+        val lastRequest = System.nanoTime
+        val (resp, result) = Await.result(f(x), Duration.Inf)
 
-  def milestones: Future[List[Milestone]] = tryAuthUrl(s"$apiRepo/milestones").get() map (_.json.validate[List[Milestone]].get)
+        if (resp.status == 202) {
+          // to avoid hitting the abuse rate limiter, leave 1s between reqs
+          Thread.sleep((1000 - ((System.nanoTime - lastRequest)/1000000)).max(100))
+          result
+        }
+        else {
+          val rateLimit = Rate(
+            resp.header("Retry-After").map(s => s.toInt * 1000),
+            resp.header("X-RateLimit-Limit").map(_.toInt),
+            resp.header("X-RateLimit-Remaining").map(_.toInt),
+            resp.header("X-RateLimit-Reset").map(s => Instant.ofEpochSecond(s.toLong)))
+
+          if (retries > 0) {
+            println(s"retrying because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
+
+            Thread.sleep(rateLimit.retryAfterMillis.getOrElse(1500).toLong)
+
+            attempt(retries - 1)
+          }
+          else JsError(s"Failed because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
+        }
+      }
+
+      attempt()
+    }
+  }
+
+  def paginate[T](response: WSResponse)(implicit rds: Reads[T]): WSResponse = {
+    response // TODO
+  }
+
+  def milestones: Future[List[Milestone]] =
+    tryAuthUrl(s"$apiRepo/milestones?state=all&per_page=100").get() map { resp =>
+      paginate[List[Milestone]](resp).json.validate[List[Milestone]].get
+    }
 
   def createRepo(repo: Repository) =
     tryAuthUrl(s"$apiOrgs/repos").post(Json.toJson(repo)) //map { resp => if (resp.status == 201) "ok" else s"error: $resp (for ${Json.toJson(repo)})" }

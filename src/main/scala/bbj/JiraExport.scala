@@ -88,6 +88,8 @@ object export {
     def createIssues(from: Int, to: Int) =
       steadily(issues.toIterator.slice(from, to).map(exportIssue))(createIssue)
 
+    def gogogo =
+      createIssues(0, 10250).foreach(println)
   }
 
   def exportIssue(issue: Issue) = {

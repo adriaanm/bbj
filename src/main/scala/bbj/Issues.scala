@@ -252,8 +252,8 @@ object Issue {
 
 }
 case class Issue(key: String, fields: Map[String, Any]) {
-  def summary          = fields get "summary"        collect { case x: String => x } get
-  def description      = fields get "description"    collect { case x: Option[String] => x } get
+  def summary          = fields get "summary"        collect { case x: String => x } getOrElse("(This issues was deleted.)")
+  def description      = fields get "description"    collect { case x: Option[String] => x } getOrElse(Some(":wastebasket:"))
 
   // pick a milestone
   def fixVersions      = fields get "fixVersions"    collect { case x: List[Version] => x } getOrElse(Nil)

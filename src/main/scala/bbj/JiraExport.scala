@@ -1,5 +1,7 @@
 package bbj
 
+import java.nio.file.Files
+import java.io.File
 import java.time.{Instant, OffsetDateTime, ZoneId}
 import java.time.format.{DateTimeFormatter, FormatStyle}
 
@@ -53,8 +55,15 @@ object export {
 
   lazy val bodies = issues.flatMap(_.comments.map(_.body)) ++ issues.flatMap(_.description)
 
-  def apply() = allIssues.toList
 
+  // to use git diff to sanity check the markdown conversion
+  def translateBodies(doOrig: Boolean) = {
+    import scala.collection.JavaConverters._
+    val changed = bodies.map(x => (x, bbj.toMarkdown.apply(x))).filterNot{ case (orig, md) => orig == md }
+    changed.zipWithIndex.foreach { case ((orig, md), i) =>
+      Files.write(new File(s"/Users/adriaan/git/bbj-md/$i.md").toPath, (if (doOrig) orig else md).lines.toList.asJava)
+    }
+  }
 
   object github extends GithubConnection {
     val materializer = export.materializer

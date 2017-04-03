@@ -65,7 +65,7 @@ object toMarkdown {
   // consume whole lines, assuming we're at the start of a line, consuming up to and including line end
   // defend against matching just End, since that would loop when we `rep` this parser
   // the line parsers don't actually include a final newline
-  // TODO: this fails to parse the last line if it doesn't end in a newline, but adding | End will loop on empty lines because we rep?
+  // TODO: this fails to parse the last line if it doesn't end in a newline, but adding | End will loop on empty lines because we rep
   lazy val anyLine: PS = P((!lineEnd ~ AnyChar).rep.! ~ lineEnd)
   // TODO: should parse:
   //  "Could we do better? Given that {{T <: Program}} on branch 1, and {{Program}} is final, could we infer that {{T == Program}}? This looks like a common case, and a worthwhile ehancement."
@@ -107,6 +107,12 @@ object toMarkdown {
 
   lazy val textile = P((wikiLine | anyLine).rep.map(_.mkString("\n")) ~ End) // all or nothing baby
 
+  // {{ or }} by itself on a line is probably meant to be {code} (often used mixed... :-/)
+  val shouldBeCode = """(?m)^\s*((\{\{)|(}}))\s*$""".r
+  def sanitize(s: String) = {
+    val lineEnding = if (s.endsWith("\n")) s else s+"\n" // to avoid issues with End.rep (see e.g. anyLine)
+    shouldBeCode.replaceAllIn(lineEnding, "{code}") // fix up unbalanced usages of "{{\n ...\n{code}"
+  }
   def apply(s: String): String =
-    textile.parse(s).fold((_, _, _) => s, (res, _) => res)
+    textile.parse(sanitize(s)).fold((_, _, _) => s, (res, _) => res)
 }

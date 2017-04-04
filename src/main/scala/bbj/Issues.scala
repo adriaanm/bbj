@@ -6,7 +6,8 @@ import java.util.Date
 case class Project(projectId: String, name: String, description: String, lead: String, startingNumber: Int = 1)
 
 object User {
-  def inContributorTeam(username: String): Boolean = true // TODO
+  val inContributorTeam =
+    Set("Atry", "Blaisorblade", "DarkDimius", "DavidBiesack", "Ichoran", "Kornel", "OlegYch", "Philippus", "RomanHargrave", "Sciss", "SethTisue", "TiarkRompf", "ViniciusMiana", "VladUreche", "adriaanm", "andy1138", "axel22", "benhutchison", "bjornregnell", "blair", "bvenners", "cchantep", "chrisokasaki", "cunei", "cvogt", "dcaoyuan", "dcsobral", "demobox", "densh", "dgruntz", "dickwall", "djspiewak", "dlwh", "dotta", "dpogretskiy", "dragos", "dubochet", "dwijnand", "felixmulder", "fsalvi", "gaydenko", "gbasler", "ghik", "gkossakowski", "gourlaysama", "gzm0", "hamishdickson", "heathermiller", "hseeberger", "hubertp", "huitseeker", "ichaki5748", "ihji", "ijuma", "ilyasergey", "ingoem", "janekdb", "jedesah", "jesnor", "jinfu-leng", "jodersky", "jsuereth", "jvican", "kanielc", "khernyo", "kzys", "leifwickland", "lexn82", "lexspoon", "lgieron", "liff", "lrytz", "mads-hartmann", "manojo", "martende", "martijnhoekstra", "melezov", "michael72", "michaelpigg", "michelou", "milessabin", "namin", "non", "odersky", "paplorinc", "paulbutcher", "paulp", "phaller", "propensive", "refried", "retronym", "rjolly", "romanowski", "rtyley", "rubyu", "ruippeixotog", "samskivert", "sjrd", "slothspot", "soc", "som-snytt", "sriggin", "sschaef", "sstucki", "szeiger", "tabdulradi", "teemulehtinen", "timcharper", "triggerNZ", "vglushak-vt", "viktorklang", "vjovanov", "xeno-by" )
 
   // assignees and top 100 submitters that also have known github username
   // Issues with assignees with missing github user:

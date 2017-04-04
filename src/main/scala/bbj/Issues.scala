@@ -6,6 +6,8 @@ import java.util.Date
 case class Project(projectId: String, name: String, description: String, lead: String, startingNumber: Int = 1)
 
 object User {
+  def inContributorTeam(username: String): Boolean = true // TODO
+
   // assignees and top 100 submitters that also have known github username
   // Issues with assignees with missing github user:
   //   Evgueni Zouev (zouev): SI-2465,SI-2551

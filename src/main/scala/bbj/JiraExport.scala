@@ -93,10 +93,17 @@ object export {
         Duration.Inf)
     }
 
+    def inviteAssignees =
+      User.toGithub.values.foreach { u =>
+        Thread.sleep(1000)
+        print(s"Inviting $u: ")
+        println(result(inviteToTeam(Team("contributors", Some(2321732)), u), Duration.Inf))
+      }
+
     // ZERO-BASED :roll_eyes:
     def createIssues(from: Int, to: Int) =
       createIssuesAndWait(issues.toIterator.slice(from, to).map { i =>
-        println(s"Exporting ${i.key} ${i.summary}")
+        print(s"Exporting ${i.key} ${i.summary}")
         exportIssue(i)
       })
 
@@ -105,6 +112,10 @@ object export {
   }
 
   def exportIssue(issue: Issue) = {
+    val assignee =
+      if (issue.fields.isEmpty) None
+      else issue.assignee.flatMap(_.toGithub).filter(User.inContributorTeam)
+
     val description =
       if (issue.fields.isEmpty) github.Description(
         title = "(Issue was deleted)",
@@ -112,26 +123,30 @@ object export {
         created_at = Instant.EPOCH,
         closed_at = Some(Instant.EPOCH),
         updated_at = Instant.EPOCH,
-        assignee = None,
+        assignee = assignee,
         milestone = None,
         closed = true,
         labels = Nil)
-      else github.Description(
-        title = issue.summary,
-        body = issue.description.map(toMarkdown.apply).getOrElse(s"(No description for ${issue.key}.)"),
-        created_at = issue.created.toInstant,
-        closed_at = issue.resolutionDate.map(_.toInstant),
-        updated_at = issue.updated.toInstant,
-        assignee = issue.assignee.flatMap(_.toGithub),
-        milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
-        closed = issue.closed,
-        labels = Labels.fromIssue(issue))
-
-    // TODO: if we end up redirecting from jira to github, these links won't work :smirk: -- add token to escape the future redirect? or already create an issues-archive subdomain?
+      else {
+        github.Description(
+          title = issue.summary,
+          body = issue.description.map(toMarkdown.apply).getOrElse(s"(No description for ${issue.key}.)"),
+          created_at = issue.created.toInstant,
+          closed_at = issue.resolutionDate.map(_.toInstant),
+          updated_at = issue.updated.toInstant,
+          assignee = assignee,
+          milestone = issue.fixVersions.headOption flatMap Milestones.fromVersion,
+          closed = issue.closed,
+          labels = Labels.fromIssue(issue))
+      }
 
     def metaComment = {
       val from = s"Imported From: https://issues.scala-lang.org/browse/${issue.key}?orig=1"
       val reporter = s"Reporter: ${issue.reporter}"
+
+      val assignees =
+        if (assignee.isEmpty) issue.assignee.map(a => s"Assignee: $a").toList
+        else Nil
 
       val affected =
         if (issue.affectedVersions.nonEmpty) List(s"Affected Versions: ${issue.affectedVersions.mkString(", ")}")
@@ -150,7 +165,7 @@ object export {
         if (issue.attachments.isEmpty) Nil
         else "Attachments:" :: issue.attachments.map(a => s" - $a")
 
-      val extras = from :: reporter :: (affected ++ alsoFixedIn ++ crossRefs ++ attachments)
+      val extras = from :: reporter :: (assignees ++ affected ++ alsoFixedIn ++ crossRefs ++ attachments)
 
       github.Comment(extras.mkString("\n", "\n", ""), Some(issue.created.toInstant))
     }

@@ -70,7 +70,7 @@ object export {
     val context = system.dispatcher
 
     def createBugRepo = result(
-      createRepo(new Repository(repoName, false, Some("The bug tracker for the Scala programming language. Please do not use for questions or feature requests."))),
+      createRepo(new Repository(repoName, `private` = true, Some("The bug tracker for the Scala programming language. Please do not use for questions or feature requests."))),
       Duration.Inf)
 
 

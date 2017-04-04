@@ -31,7 +31,7 @@ object toMarkdown {
 
   def words(p: PS): PS = P((p ~ (wordSep ~ p.?.map(_.getOrElse(""))).map(join).rep.map(_.mkString(""))).map(join))
 
-  lazy val wordSep: PS = P(wsNotEOL | CharIn(",.;:!/&()").!) // do not include "|" because it separates a link's description from the url
+  lazy val wordSep: PS = P(wsCharNotEOL | CharIn(",.;:!/&()")).rep(1).! // do not include "|" because it separates a link's description from the url
   private def phrase(delim: P0) = words(markedWord | unmarkedWord(delim))
 
   def unmarkedWord(delim: P0): PS =

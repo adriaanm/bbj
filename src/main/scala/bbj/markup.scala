@@ -31,7 +31,7 @@ object toMarkdown {
 
   def words(p: PS): PS = P((p ~ (wordSep ~ p.?.map(_.getOrElse(""))).map(join).rep.map(_.mkString(""))).map(join))
 
-  lazy val wordSep: PS = P(wsNotEOL | CharIn(",.;:!/&").!) // do not include "|" because it separates a link's description from the url
+  lazy val wordSep: PS = P(wsNotEOL | CharIn(",.;:!/&()").!) // do not include "|" because it separates a link's description from the url
   private def phrase(delim: P0) = words(markedWord | unmarkedWord(delim))
 
   def unmarkedWord(delim: P0): PS =
@@ -60,7 +60,7 @@ object toMarkdown {
     )
 
   lazy val issueUrl = P("https://issues.scala-lang.org/browse/SI-" ~ num.!)
-  lazy val issueRef: PS = P("SI-" ~ num.! | issueUrl).map(i => s"$repoRef#$i")
+  lazy val issueRef: PS = P("SI-" ~ num.! | issueUrl).map(i => s"#$i")
 
   // consume whole lines, assuming we're at the start of a line, consuming up to and including line end
   // defend against matching just End, since that would loop when we `rep` this parser

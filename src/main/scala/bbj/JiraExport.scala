@@ -95,7 +95,10 @@ object export {
 
     // ZERO-BASED :roll_eyes:
     def createIssues(from: Int, to: Int) =
-      steadily(issues.toIterator.slice(from, to).map(exportIssue))(createIssue)
+      createIssuesAndWait(issues.toIterator.slice(from, to).map { i =>
+        println(s"Exporting ${i.key} ${i.summary}")
+        exportIssue(i)
+      })
 
     def gogogo =
       createIssues(0, 10250).foreach(println)

@@ -304,32 +304,48 @@ trait GithubConnection extends JsonConnection {
   def createIssue(issue: Issue): Future[(WSResponse, JsResult[IssueResponse])] =
     tryAuthUrl(s"$apiRepo/import/issues").post(Json.toJson(issue)).map(resp => (resp, resp.json.validate[IssueResponse]))
 
-  def steadily[T, U](xs: Iterator[T])(f: T => Future[(WSResponse, JsResult[U])]): Iterator[JsResult[U]] = {
+  def issueImportStatus(url: String): Future[JsResult[IssueResponse]] =
+    tryAuthUrl(url).get.map(_.json.validate[IssueResponse])
+
+  def createIssuesAndWait(xs: Iterator[Issue]): Iterator[JsResult[IssueResponse]] = {
+    def whilePending(retries: Int)(issueResponse: JsResult[IssueResponse]): Future[JsResult[IssueResponse]] = issueResponse match {
+      case JsSuccess(IssueResponse(_, "pending", url), _) if retries > 0 =>
+        Thread.sleep(500)
+        print(".")
+        issueImportStatus(url).flatMap(whilePending(retries-1))
+      case ir => Future.successful(ir)
+    }
+
     xs map { x =>
-      def attempt(retries: Int = 3): JsResult[U] = {
+      def attempt(retries: Int = 3): JsResult[IssueResponse] = {
         val lastRequest = System.nanoTime
-        val (resp, result) = Await.result(f(x), Duration.Inf)
-
-        if (resp.status == 202) {
-          // to avoid hitting the abuse rate limiter, leave 1s between reqs
-          Thread.sleep((1000 - ((System.nanoTime - lastRequest)/1000000)).max(100))
-          result
+        val createAndCheckStatus = createIssue(x) flatMap { case (resp, ir) =>
+          whilePending(5)(ir).map(x => (resp, x))
         }
-        else {
-          val rateLimit = Rate(
-            resp.header("Retry-After").map(s => s.toInt * 1000),
-            resp.header("X-RateLimit-Limit").map(_.toInt),
-            resp.header("X-RateLimit-Remaining").map(_.toInt),
-            resp.header("X-RateLimit-Reset").map(s => Instant.ofEpochSecond(s.toLong)))
 
-          if (retries > 0) {
-            println(s"retrying because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
+        val (resp, result) = Await.result(createAndCheckStatus, Duration.Inf)
 
-            Thread.sleep(rateLimit.retryAfterMillis.getOrElse(1500).toLong)
+        result match {
+          case JsSuccess(IssueResponse(_, "imported", _), _) =>
+            // to avoid hitting the abuse rate limiter, leave 1s between reqs
+            Thread.sleep((1000 - ((System.nanoTime - lastRequest) / 1000000)).max(100))
+            println(s"\nImported ${x.issue.title}")
+            result
+          case _ => // failed to import, still pending (assume this doesn't happen), or some other error
+            val rateLimit = Rate(
+              resp.header("Retry-After").map(s => s.toInt * 1000),
+              resp.header("X-RateLimit-Limit").map(_.toInt),
+              resp.header("X-RateLimit-Remaining").map(_.toInt),
+              resp.header("X-RateLimit-Reset").map(s => Instant.ofEpochSecond(s.toLong)))
 
-            attempt(retries - 1)
-          }
-          else JsError(s"Failed because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
+            if (retries > 0) {
+              println(s"!! Retrying because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
+
+              Thread.sleep(rateLimit.retryAfterMillis.getOrElse(1500).toLong)
+
+              attempt(retries - 1)
+            }
+            else JsError(s"Failed because ${resp.status} ${resp.statusText}\t$rateLimit\n${resp.body}")
         }
       }
 

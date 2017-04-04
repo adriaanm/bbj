@@ -337,8 +337,6 @@ object export {
       case Some("Incomplete") => Some("needinfo")
       case Some("Out of Scope") => Some("wontfix")
       case Some("Fixed, Backport Pending") => Some("backport")
-//      case None => None
-//      case Some("Not a Bug") =>
       case _ => None
     }
 
@@ -359,21 +357,11 @@ object export {
       case "Compiler Backend" => Some("backend")
       case "Presentation Compiler" => Some("interactive")
       case "Macros" => Some("macros")
+      case "Misc Library" | "Concurrent Library" => Some("library")
+      case "XML Support" | "Actors Library" | "Parser Combinators" | "Swing Library"  => Some("wrong-repo")
+      case "Partest" => Some("build")
+      case "Eclipse Plugin (EOL)" => Some("interactive")
       case _ => None
-      // case "Misc Compiler" => "Misc Compiler"
-      // case "Misc Library" => "Misc Library"
-      // case "Eclipse Plugin (EOL)" => "Eclipse Plugin (EOL)"
-      // case "Packaging" => "Packaging"
-      // case "XML Support" => "XML Support"
-      // case "Jira" => "Jira"
-      // case "Website" => "Website"
-      // case "Actors Library" => "Actors Library"
-      // case "MSIL Backend" => "MSIL Backend"
-      // case "Parser Combinators" => "Parser Combinators"
-      // case "Swing Library" => "Swing Library"
-      // case "Continuations" => "Continuations"
-      // case "Concurrent Library" => "Concurrent Library"
-      // case "Partest" => "Partest"
     }
 
     val rewrite = Map(
@@ -398,78 +386,79 @@ object export {
       "feature" -> "enhancement")
 
     val all = Set(
-      "improvement",
-      "quickfix",
-      "help wanted",
-      "enhancement",
-      "blocker",
-      "critical",
-      "regression",
-      "minimized",
-      "has-pull-request",
-      "backport",
-      "reflection",
-      "typer",
-      "infer",
-      "macros",
-      "macro-paradise",
-      "backend",
-      "optimizer",
-      "specialization",
-      "patmat",
-      "mixin",
-      "parser",
-      "erasure",
-      "repl",
-      "interactive",
-      "scaladoc",
-      "lint",
-      "library",
-      "collections",
-      "docs",
-      "spec",
-      "build",
-      "crash",
-      "compiler-crash",
-      "runtime-crash",
-      "bytecode",
-      "should-not-compile",
-      "should-compile",
-      "separate-compilation",
-      "usability",
-      "structural-types",
-      "applyDynamic",
-      "java-interop",
-      "implicit",
-      "valueclass",
-      "performance",
-      "named-default-args",
-      "existential",
-      "annotations",
-      "enum",
-      "quasiquotes",
       "access",
-      "depmet",
-      "delayedinit",
-      "tcpoly",
-      "deprecation",
-      "case-class",
-      "dependent-types",
-      "implicits",
-      "serialization",
-      "implicit-classes",
-      "string-interpolation",
-      "lub",
-      "positions",
-      "package-objects",
-      "varargs",
-      "overloading",
-      "name-mangling",
-      "f-bounds",
+      "annotations",
+      "applyDynamic",
+      "backend",
+      "backport",
+      "blocker",
+      "build",
       "byname",
+      "bytecode",
+      "case-class",
+      "collections",
+      "compiler-crash",
+      "crash",
+      "critical",
+      "delayedinit",
+      "dependent-types",
+      "depmet",
+      "deprecation",
+      "docs",
+      "duplicate",
+      "enhancement",
+      "enum",
+      "erasure",
+      "existential",
+      "f-bounds",
+      "has-pull-request",
+      "help wanted",
+      "implicit",
+      "implicit-classes",
+      "implicits",
+      "improvement",
+      "infer",
+      "interactive",
+      "java-interop",
+      "library",
+      "lint",
+      "lub",
+      "macro-paradise",
+      "macros",
+      "minimized",
+      "mixin",
+      "name-mangling",
+      "named-default-args",
       "needinfo",
+      "optimizer",
+      "overloading",
+      "package-objects",
+      "parser",
+      "patmat",
+      "performance",
+      "positions",
+      "quasiquotes",
+      "quickfix",
+      "reflection",
+      "regression",
+      "repl",
+      "runtime-crash",
+      "scaladoc",
+      "separate-compilation",
+      "serialization",
+      "should-compile",
+      "should-not-compile",
+      "spec",
+      "specialization",
+      "string-interpolation",
+      "structural-types",
+      "tcpoly",
+      "typer",
+      "usability",
+      "valueclass",
+      "varargs",
       "wontfix",
-      "duplicate")
+      "wrong-repo")
   }
 
 }

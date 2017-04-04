@@ -321,7 +321,7 @@ trait GithubConnection extends JsonConnection {
       def attempt(retries: Int = 3): String = {
         val lastRequest = System.nanoTime
         val createAndCheckStatus = createIssue(x) flatMap { case (resp, ir) =>
-          whilePending(5)(ir).map(x => (resp, x))
+          whilePending(40)(ir).map(x => (resp, x))
         }
 
         val (resp, result) = Await.result(createAndCheckStatus, Duration.Inf)

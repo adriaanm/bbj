@@ -311,7 +311,7 @@ trait GithubConnection extends JsonConnection {
   def createIssuesAndWait(xs: Iterator[Issue]): Iterator[String] = {
     def whilePending(retries: Int)(issueResponse: JsResult[IssueResponse]): Future[JsResult[IssueResponse]] = issueResponse match {
       case JsSuccess(IssueResponse(_, "pending", url), _) if retries > 0 =>
-        Thread.sleep(750)
+        Thread.sleep(1000)
         print(".")
         issueImportStatus(url).flatMap(whilePending(retries-1))
       case ir => Future.successful(ir)

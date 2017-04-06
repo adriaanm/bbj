@@ -7,21 +7,21 @@ case class Project(projectId: String, name: String, description: String, lead: S
 
 object User {
   val inContributorTeam =
-    Set("Atry", "Blaisorblade", "DarkDimius", "DavidBiesack", "Ichoran", "Kornel", "OlegYch", "Philippus", "RomanHargrave", "Sciss", "SethTisue", "TiarkRompf", "ViniciusMiana", "VladUreche", "adriaanm", "andy1138", "axel22", "benhutchison", "bjornregnell", "blair", "bvenners", "cchantep", "chrisokasaki", "cunei", "cvogt", "dcaoyuan", "dcsobral", "demobox", "densh", "dgruntz", "dickwall", "djspiewak", "dlwh", "dotta", "dpogretskiy", "dragos", "dubochet", "dwijnand", "felixmulder", "fsalvi", "gaydenko", "gbasler", "ghik", "gkossakowski", "gourlaysama", "gzm0", "hamishdickson", "heathermiller", "hseeberger", "hubertp", "huitseeker", "ichaki5748", "ihji", "ijuma", "ilyasergey", "ingoem", "janekdb", "jedesah", "jesnor", "jinfu-leng", "jodersky", "jsuereth", "jvican", "kanielc", "khernyo", "kzys", "leifwickland", "lexn82", "lexspoon", "lgieron", "liff", "lrytz", "mads-hartmann", "manojo", "martende", "martijnhoekstra", "melezov", "michael72", "michaelpigg", "michelou", "milessabin", "namin", "non", "odersky", "paplorinc", "paulbutcher", "paulp", "phaller", "propensive", "refried", "retronym", "rjolly", "romanowski", "rtyley", "rubyu", "ruippeixotog", "samskivert", "sjrd", "slothspot", "soc", "som-snytt", "sriggin", "sschaef", "sstucki", "szeiger", "tabdulradi", "teemulehtinen", "timcharper", "triggerNZ", "vglushak-vt", "viktorklang", "vjovanov", "xeno-by" )
+    Set("Atry", "Blaisorblade", "DarkDimius", "DavidBiesack", "Ichoran", "JustinPihony", "Kornel", "OlegYch", "Philippus",
+      "RomanHargrave", "Sciss", "SethTisue", "ShaneDelmore", "TiarkRompf", "ViniciusMiana", "VladUreche", "adriaanm",
+      "andy1138", "axel22", "benhutchison", "bjornregnell", "blair", "burakemir", "bvenners", "cchantep", "chrisokasaki",
+      "cunei", "cvogt", "dcaoyuan", "dcsobral", "demobox", "densh", "dgruntz", "dickwall", "djspiewak", "dlwh", "dotta",
+      "dpogretskiy", "dragos", "dubochet", "dwijnand", "felixmulder", "fsalvi", "gaydenko", "gbasler", "ghik", "gkossakowski",
+      "gourlaysama", "gzm0", "hamishdickson", "hamnis", "heathermiller", "hseeberger", "hubertp", "huitseeker", "ichaki5748",
+      "ihji", "ijuma", "ilyasergey", "ingoem", "janekdb", "jasonxh", "jdevelop", "jedesah", "jesnor", "jinfu-leng", "jodersky",
+      "jorgeortiz85", "jsuereth", "jvican", "kanielc", "khernyo", "kmizu", "kzys", "leifwickland", "lexn82", "lexspoon",
+      "lgieron", "liff", "lindydonna", "lrytz", "mads-hartmann", "manojo", "martende", "martijnhoekstra", "melezov", "michael72",
+      "michaelpigg", "michelou", "milessabin", "namin", "nilskp", "non", "odersky", "paplorinc", "paulbutcher", "paulp",
+      "phaller", "propensive", "refried", "retronym", "richdougherty", "rjolly", "romanowski", "rtyley", "rubyu", "ruippeixotog",
+      "samskivert", "sjrd", "slothspot", "soc", "som-snytt", "sriggin", "sschaef", "sstucki", "stepancheg", "szeiger", "tabdulradi",
+      "teemulehtinen", "timcharper", "triggerNZ", "vglushak-vt", "vigdorchik", "viktorklang", "vjovanov", "xeno-by")
 
-  // assignees and top 100 submitters that also have known github username
-  // Issues with assignees with missing github user:
-  //   Evgueni Zouev (zouev): SI-2465,SI-2551
-  //   Michael Pradel (pradel): SI-631,SI-790,SI-1027
-  //   Geoffrey Alan Washburn (washburn): SI-26,SI-56,SI-93,SI-251,SI-274,SI-304,SI-305,SI-323,SI-348,SI-350,SI-367,SI-368,SI-371,SI-416,SI-417,SI-483,SI-548,SI-549,SI-550,SI-641,SI-684,SI-706,SI-708,SI-721,SI-734,SI-769,SI-773,SI-791,SI-809,SI-819,SI-820,SI-947,SI-988,SI-992,SI-1083,SI-1092,SI-1161,SI-1323,SI-1354,SI-1371,SI-1380,SI-1391,SI-1404,SI-1440,SI-1478,SI-1511,SI-1543,SI-1684
-  //   Mohsen Lesani [X] (lesani): SI-1523,SI-1550,SI-1559,SI-1604
-  //   Kevin Wright (kev.lee.wright): SI-2675
-  //   Volodymyr Glushak (v.glushak-at-gmail.com): SI-9888
-  //   Anders Bach Nielsen [X] (nielsen): SI-596,SI-610,SI-1266,SI-1295,SI-1322,SI-1524,SI-1622,SI-1685
-  //   Mike (mike): SI-9506,SI-9508,SI-9513,SI-9520,SI-9522,SI-9724,SI-9732,SI-9789
-  //   Hamish Dickson (hamish.dickson-at-gmail.com): SI-9632
-  //   Tim Spence (timspence): SI-9909
-  //   Masato Sogame (pocket): SI-6144,SI-8699
+  // most assignees and top 100 submitters that also have known github username
   val toGithub = Map(
     "JanBessai"                      -> "JanBessai", // Jan Bessai
     "JustinPihony"                   -> "JustinPihony", // Justin Pihony
@@ -36,7 +36,7 @@ object User {
     "allisonhb"                      -> "allisonhb", // allisonhb
     "andy"                           -> "andy1138", // Andy Hicks
     "anli"                           -> "gaydenko",
-    "antoras"                        -> "sschaef ",
+    "antoras"                        -> "sschaef",
     "apm"                            -> "som-snytt",
     "apwashere"                      -> "demobox", // Andrew Phillips
     "arya"                           -> "refried",
@@ -152,7 +152,7 @@ object User {
     "oxbow_lakes"                    -> "oxbowlakes",
     "paplorinc"                      -> "paplorinc", // Pap Lőrinc
     "paulbutcher"                    -> "paulbutcher",
-    "pchiusano"                      -> "pchiusano ",
+    "pchiusano"                      -> "pchiusano",
     "pggiarrusso"                    -> "Blaisorblade",
     "phaller"                        -> "phaller",
     "plocinic"                       -> "hubertp",
@@ -202,7 +202,7 @@ object User {
     "venechka1"                      -> "vigdorchik",
     "viktor.klang"                   -> "viktorklang", // Viktor Klang
     "viniciusmiana"                  -> "ViniciusMiana", // Vinicius Miana Bezerra
-    "vjovanov"                       -> "vjovanov ", // Vojin Jovanovic
+    "vjovanov"                       -> "vjovanov", // Vojin Jovanovic
     "vogt"                           -> "cvogt",
     "vuakko"                         -> "vuakko", // Niko Vuokko
     "wiejacha"                       -> "pawel-wiejacha", // Paweł Wiejacha

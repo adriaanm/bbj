@@ -308,50 +308,49 @@ trait GithubConnection extends JsonConnection {
   def issueImportStatus(url: String): Future[JsResult[IssueResponse]] =
     tryAuthUrl(url).get.map(_.json.validate[IssueResponse])
 
-  def createIssuesAndWait(xs: Iterator[Issue]): Iterator[String] = {
-    def whilePending(retries: Int)(issueResponse: JsResult[IssueResponse]): Future[JsResult[IssueResponse]] = issueResponse match {
-      case JsSuccess(IssueResponse(_, "pending", url), _) if retries > 0 =>
-        Thread.sleep(1000)
-        print(".")
-        issueImportStatus(url).flatMap(whilePending(retries-1))
-      case ir => Future.successful(ir)
-    }
+  def createIssuesAndWait(xs: Iterator[Issue]): Iterator[String] = xs map { x =>
+    def whilePending(retries: Int, url: String, lastRequest: Long)(issueResponse: JsResult[IssueResponse]): Future[String] = {
+      // to avoid hitting the abuse rate limiter, leave 1s between reqs
+      Thread.sleep((1000 - ((System.nanoTime - lastRequest) / 1000000)).max(100))
 
-    xs map { x =>
-      def attempt(retries: Int = 3): String = {
-        val lastRequest = System.nanoTime
-        val createAndCheckStatus = createIssue(x) flatMap { case (resp, ir) =>
-          whilePending(40)(ir).map(x => (resp, x))
-        }
+      issueResponse match {
+        case JsSuccess(IssueResponse(_, "imported", _), _) =>
+          Future.successful(s" - Imported ${x.issue.title}.\n")
 
-        val (resp, result) = Await.result(createAndCheckStatus, Duration.Inf)
-        val rateLimit = Try { Rate(
-          resp.header("Retry-After").map(s => s.toInt * 1000),
-          resp.header("X-RateLimit-Limit").map(_.toInt),
-          resp.header("X-RateLimit-Remaining").map(_.toInt),
-          resp.header("X-RateLimit-Reset").map(s => Instant.ofEpochSecond(s.toLong))) } toOption
+        case JsSuccess(ir@IssueResponse(_, "failed", _), _) =>
+          Future.failed(new RuntimeException(s"Failed with $ir"))
 
-        println("\t"+rateLimit.getOrElse(""))
+        case JsSuccess(IssueResponse(_, "pending", _), _) if retries > 0 =>
+          print(".")
+          issueImportStatus(url).flatMap(whilePending(retries-1, url, System.nanoTime))
 
-        result match {
-          case JsSuccess(IssueResponse(_, "imported", _), _) =>
-            // to avoid hitting the abuse rate limiter, leave 1s between reqs
-            Thread.sleep((1000 - ((System.nanoTime - lastRequest) / 1000000)).max(100))
-            s" - Imported ${x.issue.title}.\n"
-          case _ if retries > 0 =>
-            // failed to import, still pending (assume this doesn't happen), or some other error
-            println(s"!! Retrying because ${resp.status} ${resp.statusText}\n${resp.body}")
+        case _ if retries > 0 =>
+          print("!")
+          issueImportStatus(url).flatMap(whilePending(retries-1, url, System.nanoTime))
 
-            Thread.sleep(rateLimit.flatMap(_.retryAfterMillis).getOrElse(1500).toLong)
-            attempt(retries - 1)
-          case _ =>
-            throw new RuntimeException(s"Failed with $result because ${resp.status} ${resp.statusText}\n${resp.body}")
-        }
+        case _ =>
+          Future.failed(new RuntimeException(s"Failed with $issueResponse"))
       }
-
-      attempt()
     }
+
+    val createAndCheckStatus = createIssue(x) flatMap { case (resp, ir@JsSuccess(IssueResponse(_, _, url), _)) => // we need the url to even start, if there's none, abort with match error
+      val f = whilePending(40, url, System.nanoTime)(ir)
+      f.onFailure { case _: RuntimeException => println("!! ${resp.status} ${resp.statusText}\n${resp.body}") }
+      f.map(x => (resp, x))
+    }
+
+    val (resp, result) = Await.result(createAndCheckStatus, Duration.Inf)
+    val rateLimit = Try { Rate(
+      resp.header("Retry-After").map(s => s.toInt * 1000),
+      resp.header("X-RateLimit-Limit").map(_.toInt),
+      resp.header("X-RateLimit-Remaining").map(_.toInt),
+      resp.header("X-RateLimit-Reset").map(s => Instant.ofEpochSecond(s.toLong))) } getOrElse("")
+
+    println("\t"+rateLimit)
+
+    result
   }
+
 
   def paginate[T](response: WSResponse)(implicit rds: Reads[T]): WSResponse = {
     response // TODO
